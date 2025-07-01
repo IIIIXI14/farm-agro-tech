@@ -1,0 +1,26 @@
+{
+  "name": "farm-automation-firebase-setup",
+  "version": "1.0.0",
+  "description": "Firebase Firestore setup script for Day 11 Farm Automation",
+  "main": "firebase_setup.js",
+  "scripts": {
+    "setup": "node firebase_setup.js",
+    "verify": "node -e \"require('./firebase_setup.js').verifySetup()\""
+  },
+  "dependencies": {
+    "firebase-admin": "^11.11.0"
+  },
+  "keywords": [
+    "firebase",
+    "firestore",
+    "automation",
+    "esp8266",
+    "farm",
+    "iot"
+  ],
+  "author": "Farm Agro Tech",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+} 

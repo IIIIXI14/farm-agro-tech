@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "791742565126",
+    "project_id": "farmagrotech-7a3cf",
+    "storage_bucket": "farmagrotech-7a3cf.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:791742565126:android:71cedbeb7b232bc429ac87",
+        "android_client_info": {
+          "package_name": "com.harshal.farmagrotech"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBlgom7hmUl3bclgcI7Byu1INlhqk3Eafo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
