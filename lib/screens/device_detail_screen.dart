@@ -268,8 +268,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> with SingleTick
     final sensorData = Map<String, dynamic>.from(data['sensorData'] ?? {});
     final temperature = sensorData['temperature'] ?? 0.0;
     final humidity = sensorData['humidity'] ?? 0.0;
-    final actuators = Map<String, dynamic>.from(data['actuators'] ?? {});
-    final motorStatus = actuators['motor'] == true;
 
     return ListView(
       padding: const EdgeInsets.all(16),
@@ -282,15 +280,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> with SingleTick
             fontSize: 18,
             fontWeight: FontWeight.bold,
           ),
-        ),
-        const SizedBox(height: 16),
-        // Motor toggle switch
-        SwitchListTile(
-          title: const Text('Motor Control'),
-          value: motorStatus,
-          onChanged: (bool newValue) {
-            deviceService.updateActuator(widget.deviceId, 'motor', newValue);
-          },
         ),
         const SizedBox(height: 16),
         Row(
@@ -942,7 +931,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> with SingleTick
         .doc(widget.uid)
         .collection('devices')
         .doc(widget.deviceId);
-    final testLogRef = deviceRef.collection('testLog').orderBy('timestamp', descending: true).limit(1);
     final deviceService = DeviceService(widget.uid);
     final themeService = Provider.of<ThemeService>(context);
 
@@ -1100,7 +1088,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> with SingleTick
             Tab(text: 'History'),
             Tab(text: 'Schedules'),
             Tab(text: 'Rules'),
-            Tab(text: 'Debug'),
           ],
         ),
       ),
@@ -1149,35 +1136,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen> with SingleTick
               ),
               _buildSchedulesTab(data, deviceService),
               _buildAutomationRulesTab(data, deviceService),
-              // Debug tab
-              StreamBuilder<QuerySnapshot>(
-                stream: testLogRef.snapshots(),
-                builder: (context, snapshot) {
-                  if (!snapshot.hasData || snapshot.data!.docs.isEmpty) {
-                    return const Center(child: Text('No test log available'));
-                  }
-                  final log = snapshot.data!.docs.first.data() as Map<String, dynamic>;
-                  return Padding(
-                    padding: const EdgeInsets.all(24.0),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        const Text('Last Test Log:', style: TextStyle(fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 12),
-                        Text(log.toString()),
-                        if (log['error'] != null) ...[
-                          const SizedBox(height: 12),
-                          Text('Error: ${log['error']}', style: const TextStyle(color: Colors.red)),
-                        ],
-                        if (log['heartbeat'] != null) ...[
-                          const SizedBox(height: 12),
-                          Text('Heartbeat: ${log['heartbeat']}'),
-                        ],
-                      ],
-                    ),
-                  );
-                },
-              ),
             ],
           );
         },
