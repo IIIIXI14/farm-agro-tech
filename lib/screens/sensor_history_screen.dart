@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import '../widgets/sensor_history_chart.dart';
-import '../services/history_service.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_database/firebase_database.dart';
+import '../services/app_config.dart';
+import 'package:fl_chart/fl_chart.dart';
 
 class SensorHistoryScreen extends StatefulWidget {
   final String uid;
@@ -29,7 +30,7 @@ class _SensorHistoryScreenState extends State<SensorHistoryScreen> with SingleTi
   @override
   void initState() {
     super.initState();
-    _tabController = TabController(length: 2, vsync: this);
+    _tabController = TabController(length: 3, vsync: this);
     _loadData();
   }
 
@@ -53,20 +54,105 @@ class _SensorHistoryScreenState extends State<SensorHistoryScreen> with SingleTi
         '7d' => 168,
         _ => 24,
       };
-      final startTime = DateTime.now().subtract(Duration(hours: hours)).millisecondsSinceEpoch;
-      final ref = FirebaseDatabase.instance.ref('users/${widget.uid}/devices/${widget.deviceId}/history');
-      final snapshot = await ref.orderByChild('timestamp').startAt(startTime).get();
-      final List<Map<String, dynamic>> data = [];
-      if (snapshot.exists) {
-        for (final child in snapshot.children) {
-          final val = child.value;
-          if (val is Map) {
-            final map = Map<String, dynamic>.from(val as Map);
-            data.add(map);
+      final startTime = DateTime.now().subtract(Duration(hours: hours));
+      
+      // Try RTDB first: Users/{uid}/{deviceId}/History (list or map)
+      List<Map<String, dynamic>> data = [];
+      try {
+        final db = FirebaseDatabase.instanceFor(
+          app: Firebase.app(),
+          databaseURL: AppConfig.realtimeDbUrl,
+        );
+        final ref = db.ref('Users/${widget.uid}/devices/${widget.deviceId}/History');
+        final snap = await ref.get();
+        if (snap.exists) {
+          if (snap.value is List) {
+            final list = (snap.value as List)
+                .where((e) => e != null)
+                .map((e) => Map<String, dynamic>.from(e as Map))
+                .toList();
+            data.addAll(list);
+          } else if (snap.value is Map) {
+            final map = Map<String, dynamic>.from(snap.value as Map);
+            for (final entry in map.values) {
+              if (entry is Map) {
+                data.add(Map<String, dynamic>.from(entry));
+              }
+            }
+          }
+          // Filter by timestamp if present
+          data = data.where((m) {
+            final ts = m['timestamp'];
+            if (ts == null) return false;
+            if (ts is int) {
+              return DateTime.fromMillisecondsSinceEpoch(ts).isAfter(startTime);
+            }
+            if (ts is double) {
+              return DateTime.fromMillisecondsSinceEpoch(ts.toInt()).isAfter(startTime);
+            }
+            if (ts is String) {
+              final parsed = DateTime.tryParse(ts);
+              return parsed != null && parsed.isAfter(startTime);
+            }
+            return false;
+          }).toList()
+            ..sort((a, b) {
+              final at = (a['timestamp'] is int)
+                  ? a['timestamp'] as int
+                  : (a['timestamp'] is double)
+                      ? (a['timestamp'] as double).toInt()
+                      : (a['timestamp'] is String)
+                          ? (DateTime.tryParse(a['timestamp'])?.millisecondsSinceEpoch ?? 0)
+                          : 0;
+              final bt = (b['timestamp'] is int)
+                  ? b['timestamp'] as int
+                  : (b['timestamp'] is double)
+                      ? (b['timestamp'] as double).toInt()
+                      : (b['timestamp'] is String)
+                          ? (DateTime.tryParse(b['timestamp'])?.millisecondsSinceEpoch ?? 0)
+                          : 0;
+              return at.compareTo(bt);
+            });
+        }
+      } catch (_) {
+        // Ignore RTDB errors; we'll fallback to Firestore
+      }
+
+      // Fallback to Firestore if RTDB had no usable data
+      if (data.isEmpty) {
+        final querySnapshot = await FirebaseFirestore.instance
+            .collection('users')
+            .doc(widget.uid)
+            .collection('devices')
+            .doc(widget.deviceId)
+            .collection('history')
+            .where('timestamp', isGreaterThanOrEqualTo: startTime)
+            .orderBy('timestamp', descending: false)
+            .get();
+
+        for (final doc in querySnapshot.docs) {
+          final raw = doc.data();
+          // Defensive parsing
+          final temp = (raw['temperature'] as num?)?.toDouble();
+          final hum = (raw['humidity'] as num?)?.toDouble();
+          final soilMoisture = (raw['soilMoisture'] as num?)?.toDouble();
+          final ts = raw['timestamp'];
+          DateTime? dt;
+          if (ts is Timestamp) dt = ts.toDate();
+          if (ts is int) dt = DateTime.fromMillisecondsSinceEpoch(ts);
+          if (ts is double) dt = DateTime.fromMillisecondsSinceEpoch(ts.toInt());
+          if (ts is String) dt = DateTime.tryParse(ts);
+          if (temp != null && hum != null && dt != null) {
+            data.add({
+              'temperature': temp,
+              'humidity': hum,
+              'soilMoisture': soilMoisture ?? 0.0,
+              'timestamp': Timestamp.fromDate(dt),
+            });
           }
         }
       }
-      data.sort((a, b) => (a['timestamp'] as int).compareTo(b['timestamp'] as int));
+
       setState(() {
         _historyData = data;
         _isLoading = false;
@@ -75,12 +161,14 @@ class _SensorHistoryScreenState extends State<SensorHistoryScreen> with SingleTi
       setState(() {
         _isLoading = false;
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text('Failed to load history: $e'),
-          backgroundColor: Colors.red,
-        ),
-      );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to load history: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -117,8 +205,8 @@ class _SensorHistoryScreenState extends State<SensorHistoryScreen> with SingleTi
           _loadData();
         }
       },
-      backgroundColor: isSelected ? Theme.of(context).primaryColor.withOpacity(0.1) : null,
-      selectedColor: Theme.of(context).primaryColor.withOpacity(0.2),
+      backgroundColor: isSelected ? Theme.of(context).primaryColor.withValues(alpha: 0.1) : null,
+      selectedColor: Theme.of(context).primaryColor.withValues(alpha: 0.2),
       labelStyle: TextStyle(
         color: isSelected ? Theme.of(context).primaryColor : null,
         fontWeight: isSelected ? FontWeight.bold : null,
@@ -198,7 +286,11 @@ class _SensorHistoryScreenState extends State<SensorHistoryScreen> with SingleTi
         ),
         bottom: TabBar(
           controller: _tabController,
-          tabs: const [Tab(text: 'Temperature'), Tab(text: 'Humidity')],
+          tabs: const [
+            Tab(text: 'Temperature'), 
+            Tab(text: 'Humidity'),
+            Tab(text: 'Soil Moisture')
+          ],
         ),
       ),
       body: Column(
@@ -218,7 +310,7 @@ class _SensorHistoryScreenState extends State<SensorHistoryScreen> with SingleTi
                   ListView(
                     children: [
                       _buildStats(_historyData!, 'temperature', '°C'),
-                      _SensorHistoryChartRTDB(
+                      _SensorHistoryChart(
                         historyData: _historyData!,
                         title: 'Temperature History',
                         lineColor: Colors.orange,
@@ -230,11 +322,23 @@ class _SensorHistoryScreenState extends State<SensorHistoryScreen> with SingleTi
                   ListView(
                     children: [
                       _buildStats(_historyData!, 'humidity', '%'),
-                      _SensorHistoryChartRTDB(
+                      _SensorHistoryChart(
                         historyData: _historyData!,
                         title: 'Humidity History',
                         lineColor: Colors.blue,
                         valueType: 'humidity',
+                        unit: '%',
+                      ),
+                    ],
+                  ),
+                  ListView(
+                    children: [
+                      _buildStats(_historyData!, 'soilMoisture', '%'),
+                      _SensorHistoryChart(
+                        historyData: _historyData!,
+                        title: 'Soil Moisture History',
+                        lineColor: Colors.green,
+                        valueType: 'soilMoisture',
                         unit: '%',
                       ),
                     ],
@@ -248,29 +352,45 @@ class _SensorHistoryScreenState extends State<SensorHistoryScreen> with SingleTi
   }
 }
 
-class _SensorHistoryChartRTDB extends StatelessWidget {
+class _SensorHistoryChart extends StatelessWidget {
   final List<Map<String, dynamic>> historyData;
   final String title;
   final Color lineColor;
   final String valueType;
   final String unit;
-  const _SensorHistoryChartRTDB({required this.historyData, required this.title, required this.lineColor, required this.valueType, required this.unit});
+  
+  const _SensorHistoryChart({
+    required this.historyData, 
+    required this.title, 
+    required this.lineColor, 
+    required this.valueType, 
+    required this.unit
+  });
+  
   @override
   Widget build(BuildContext context) {
     if (historyData.isEmpty) {
       return const Center(child: Text('No historical data available'));
     }
+    
     final spots = historyData.map((data) {
-      final timestamp = (data['timestamp'] as num?)?.toInt() ?? 0;
+      final timestamp = data['timestamp'] as Timestamp?;
       final value = (data[valueType] as num?)?.toDouble() ?? 0.0;
-      return FlSpot(timestamp.toDouble(), value);
-    }).toList();
+      final x = timestamp?.millisecondsSinceEpoch.toDouble() ?? 0.0;
+      return FlSpot(x, value);
+    }).where((spot) => spot.x > 0).toList();
+    
+    if (spots.isEmpty) {
+      return const Center(child: Text('No valid data points'));
+    }
+    
     spots.sort((a, b) => a.x.compareTo(b.x));
     double minY = spots.map((spot) => spot.y).reduce((a, b) => a < b ? a : b);
     double maxY = spots.map((spot) => spot.y).reduce((a, b) => a > b ? a : b);
     final padding = (maxY - minY) * 0.1;
     minY -= padding;
     maxY += padding;
+    
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -287,7 +407,12 @@ class _SensorHistoryChartRTDB extends StatelessWidget {
             padding: const EdgeInsets.all(16.0),
             child: LineChart(
               LineChartData(
-                gridData: FlGridData(show: true, drawVerticalLine: true, horizontalInterval: 1, verticalInterval: 3600000),
+                gridData: const FlGridData(
+                  show: true, 
+                  drawVerticalLine: true, 
+                  horizontalInterval: 1, 
+                  verticalInterval: 3600000
+                ),
                 titlesData: FlTitlesData(
                   show: true,
                   rightTitles: const AxisTitles(sideTitles: SideTitles(showTitles: false)),
@@ -323,7 +448,10 @@ class _SensorHistoryChartRTDB extends StatelessWidget {
                     ),
                   ),
                 ),
-                borderData: FlBorderData(show: true, border: Border.all(color: Colors.grey.shade300)),
+                borderData: FlBorderData(
+                  show: true, 
+                  border: Border.all(color: Colors.grey.shade300)
+                ),
                 minX: spots.first.x,
                 maxX: spots.last.x,
                 minY: minY,
@@ -336,7 +464,10 @@ class _SensorHistoryChartRTDB extends StatelessWidget {
                     barWidth: 3,
                     isStrokeCapRound: true,
                     dotData: const FlDotData(show: false),
-                    belowBarData: BarAreaData(show: true, color: lineColor.withOpacity(0.1)),
+                    belowBarData: BarAreaData(
+                      show: true, 
+                      color: lineColor.withValues(alpha: 0.1)
+                    ),
                   ),
                 ],
                 lineTouchData: LineTouchData(

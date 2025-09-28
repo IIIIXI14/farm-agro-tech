@@ -82,7 +82,7 @@ class _OfflineStatusWidgetState extends State<OfflineStatusWidget> {
   @override
   Widget build(BuildContext context) {
     return Card(
-      margin: const EdgeInsets.all(8.0),
+      margin: const EdgeInsets.fromLTRB(16, 0, 16, 16),
       child: Padding(
         padding: const EdgeInsets.all(16.0),
         child: Column(
@@ -90,7 +90,7 @@ class _OfflineStatusWidgetState extends State<OfflineStatusWidget> {
           children: [
             Row(
               children: [
-                const Icon(Icons.storage, color: Colors.blue),
+                const Icon(Icons.storage_rounded, color: Colors.blue),
                 const SizedBox(width: 8),
                 const Text(
                   'Offline Storage Status',
@@ -108,10 +108,10 @@ class _OfflineStatusWidgetState extends State<OfflineStatusWidget> {
               ],
             ),
             const SizedBox(height: 16),
-            _buildStatRow('Device States', _stats['deviceStates'] ?? 0, Icons.devices),
-            _buildStatRow('Sensor Readings', _stats['sensorReadings'] ?? 0, Icons.thermostat),
-            _buildStatRow('Automation Rules', _stats['automationRules'] ?? 0, Icons.rule),
-            _buildStatRow('User Data', _stats['userData'] ?? 0, Icons.person),
+            _buildStatRow('Device States', _stats['deviceStates'] ?? 0, Icons.devices_other_rounded),
+            _buildStatRow('Sensor Readings', _stats['sensorReadings'] ?? 0, Icons.thermostat_rounded),
+            _buildStatRow('Automation Rules', _stats['automationRules'] ?? 0, Icons.auto_mode_rounded),
+            _buildStatRow('User Data', _stats['userData'] ?? 0, Icons.person_rounded),
             const SizedBox(height: 16),
             Row(
               children: [

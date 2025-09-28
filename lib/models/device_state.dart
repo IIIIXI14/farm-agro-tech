@@ -44,7 +44,7 @@ class DeviceState extends HiveObject {
     return DeviceState(
       deviceId: deviceId,
       actuators: actuators,
-      lastUpdated: (data['lastUpdate'] as Timestamp?)?.toDate() ?? DateTime.now(),
+      lastUpdated: (data['timestamp'] as Timestamp?)?.toDate() ?? (data['lastUpdate'] as Timestamp?)?.toDate() ?? DateTime.now(),
       userId: userId,
       status: data['status'] as String? ?? 'offline',
       deviceName: data['name'] as String?,
@@ -55,7 +55,7 @@ class DeviceState extends HiveObject {
   Map<String, dynamic> toFirestore() {
     return {
       'actuators': actuators,
-      'lastUpdate': lastUpdated,
+      'timestamp': lastUpdated,
       'status': status,
       if (deviceName != null) 'name': deviceName,
     };

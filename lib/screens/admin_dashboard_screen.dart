@@ -1,9 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:provider/provider.dart';
-import '../services/theme_service.dart';
 import '../services/admin_service.dart';
-import '../services/device_service.dart';
 import '../services/log_service.dart';
 
 class AdminDashboardScreen extends StatefulWidget {
@@ -18,7 +15,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
   TextEditingController searchController = TextEditingController();
   String searchQuery = '';
   final _deviceSearchController = TextEditingController();
-  String _deviceSearchQuery = '';
+
 
   @override
   void initState() {
@@ -291,7 +288,7 @@ class _AdminDashboardScreenState extends State<AdminDashboardScreen> with Single
                   final device = devices[index];
                   final deviceId = device.id;
                   final status = device['status'] ?? 'unknown';
-                  final lastUpdate = device['lastUpdate'] as Timestamp?;
+                  final lastUpdate = device['timestamp'] as Timestamp? ?? device['createdAt'] as Timestamp?;
                   final owner = device.reference.parent.parent?.id ?? 'Unknown';
 
                   return Card(

@@ -1,0 +1,70 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Users can read and write their own user document
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+      
+      // Users can read and write their own devices
+      match /devices/{deviceId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+        
+        // Users can read and write sensor readings for their devices
+        match /sensorReadings/{readingId} {
+          allow read, write: if request.auth != null && request.auth.uid == userId;
+        }
+        
+        // Users can read and write automation rules for their devices
+        match /automationRules/{ruleId} {
+          allow read, write: if request.auth != null && request.auth.uid == userId;
+        }
+        
+        // Users can read and write schedules for their devices
+        match /schedules/{scheduleId} {
+          allow read, write: if request.auth != null && request.auth.uid == userId;
+        }
+      }
+      
+      // Users can read and write their own logs
+      match /logs/{logId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+      
+      // Users can read and write their own notifications
+      match /notifications/{notificationId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+      
+      // Users can read and write their own alerts
+      match /alerts/{alertId} {
+        allow read, write: if request.auth != null && request.auth.uid == userId;
+      }
+    }
+    
+    // Phone verification data (temporary storage)
+    match /phoneVerifications/{verificationId} {
+      allow read: if request.auth != null && 
+        (resource.data.userId == request.auth.uid || verificationId == request.auth.uid);
+      allow write: if request.auth != null && 
+        request.auth.uid == request.resource.data.userId &&
+        request.resource.data.userId == request.auth.uid;
+    }
+    
+    // Admin users can read all data (optional - for admin dashboard)
+    match /admin/{document=**} {
+      allow read, write: if request.auth != null && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    }
+    
+    // Public configuration data (read-only for all authenticated users)
+    match /config/{document=**} {
+      allow read: if request.auth != null;
+    }
+    
+    // Deny all other access
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

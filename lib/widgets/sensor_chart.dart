@@ -1,6 +1,9 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_database/firebase_database.dart';
+import '../services/app_config.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'dart:async';
 
 class SensorChart extends StatefulWidget {
   final String uid;
@@ -14,40 +17,102 @@ class SensorChart extends StatefulWidget {
 class _SensorChartState extends State<SensorChart> {
   List<FlSpot> tempData = [];
   List<FlSpot> humData = [];
+  List<FlSpot> soilMoistureData = [];
+  StreamSubscription<DatabaseEvent>? _sub;
+  Timer? _fallbackTimer;
+  bool _timedOut = false;
 
   @override
   void initState() {
     super.initState();
+    // After a short timeout, if no points, show empty state instead of spinners
+    _fallbackTimer = Timer(const Duration(seconds: 3), () {
+      if (!mounted) return;
+      if (tempData.isEmpty && humData.isEmpty && soilMoistureData.isEmpty) {
+        setState(() => _timedOut = true);
+      }
+    });
     listenSensorUpdates();
   }
 
-  void listenSensorUpdates() {
-    FirebaseFirestore.instance
-        .collection("users")
-        .doc(widget.uid)
-        .collection("devices")
-        .doc(widget.deviceId)
-        .snapshots()
-        .listen((snapshot) {
-      final data = snapshot.data()?["sensorData"];
-      if (data != null) {
-        final t = (data["temperature"] ?? 0).toDouble();
-        final h = (data["humidity"] ?? 0).toDouble();
+  @override
+  void dispose() {
+    _sub?.cancel();
+    _fallbackTimer?.cancel();
+    super.dispose();
+  }
 
+  Map<String, dynamic> _asMap(dynamic v) => v is Map ? Map<String, dynamic>.from(v) : <String, dynamic>{};
+
+  void listenSensorUpdates() {
+    final db = FirebaseDatabase.instanceFor(
+      app: Firebase.app(),
+      databaseURL: AppConfig.realtimeDbUrl,
+    );
+    final ref = db.ref('Users/${widget.uid}/Devices/${widget.deviceId}');
+    _sub = ref.onValue.listen((event) {
+      if (!mounted) return;
+      final root = _asMap(event.snapshot.value);
+      final sensorData = _asMap(root['Sensor_Data'] is Map ? root['Sensor_Data'] : root['sensorData']);
+      if (sensorData.isNotEmpty) {
+        final t = ((sensorData['temperature'] ?? 0) as num).toDouble();
+        final h = ((sensorData['humidity'] ?? 0) as num).toDouble();
+        final sm = ((sensorData['soilMoisture'] ?? 0) as num).toDouble();
         final now = DateTime.now().millisecondsSinceEpoch.toDouble();
         setState(() {
           tempData.add(FlSpot(now, t));
           humData.add(FlSpot(now, h));
+          soilMoistureData.add(FlSpot(now, sm));
           if (tempData.length > 20) tempData.removeAt(0);
           if (humData.length > 20) humData.removeAt(0);
+          if (soilMoistureData.length > 20) soilMoistureData.removeAt(0);
+          _timedOut = false;
+        });
+        _fallbackTimer?.cancel();
+      }
+    }, onError: (error) {
+      if (mounted) {
+        setState(() {
+          _timedOut = true;
         });
       }
     });
   }
 
+  Widget _buildEmpty(String title) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+          child: Text(
+            title,
+            style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+          ),
+        ),
+        const SizedBox(height: 56, child: Center(child: Text('No data yet'))),
+      ],
+    );
+  }
+
   Widget _buildChart(List<FlSpot> data, String title, Color color, String unit) {
     if (data.isEmpty) {
-      return const Center(child: CircularProgressIndicator());
+      if (_timedOut) {
+        return _buildEmpty(title);
+      }
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 8.0),
+            child: Text(
+              title,
+              style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+            ),
+          ),
+          const SizedBox(height: 56, child: Center(child: CircularProgressIndicator())),
+        ],
+      );
     }
 
     return Column(
@@ -88,7 +153,7 @@ class _SensorChartState extends State<SensorChart> {
                   horizontalInterval: 10,
                   getDrawingHorizontalLine: (value) {
                     return FlLine(
-                      color: Colors.grey.withOpacity(0.2),
+                      color: Colors.grey.withValues(alpha: 0.2),
                       strokeWidth: 1,
                     );
                   },
@@ -135,7 +200,7 @@ class _SensorChartState extends State<SensorChart> {
                     dotData: const FlDotData(show: false),
                     belowBarData: BarAreaData(
                       show: true,
-                      color: color.withOpacity(0.1),
+                      color: color.withValues(alpha: 0.1),
                     ),
                   ),
                 ],
@@ -167,6 +232,8 @@ class _SensorChartState extends State<SensorChart> {
         _buildChart(tempData, '🌡️ Temperature', Colors.redAccent, '°C'),
         const SizedBox(height: 16),
         _buildChart(humData, '💧 Humidity', Colors.blueAccent, '%'),
+        const SizedBox(height: 16),
+        _buildChart(soilMoistureData, '🌱 Soil Moisture', Colors.greenAccent, '%'),
       ],
     );
   }

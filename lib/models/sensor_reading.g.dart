@@ -22,13 +22,22 @@ class SensorReadingAdapter extends TypeAdapter<SensorReading> {
       humidity: fields[2] as double,
       timestamp: fields[3] as DateTime,
       userId: fields[4] as String?,
+      soilMoisture: fields[5] as double?,
+      lightIntensity: fields[6] as double?,
+      phLevel: fields[7] as double?,
+      co2Level: fields[8] as double?,
+      airQuality: fields[9] as double?,
+      rainfall: fields[10] as double?,
+      windSpeed: fields[11] as double?,
+      weatherCondition: fields[12] as String?,
+      additionalData: (fields[13] as Map?)?.cast<String, dynamic>(),
     );
   }
 
   @override
   void write(BinaryWriter writer, SensorReading obj) {
     writer
-      ..writeByte(5)
+      ..writeByte(14)
       ..writeByte(0)
       ..write(obj.deviceId)
       ..writeByte(1)
@@ -38,7 +47,25 @@ class SensorReadingAdapter extends TypeAdapter<SensorReading> {
       ..writeByte(3)
       ..write(obj.timestamp)
       ..writeByte(4)
-      ..write(obj.userId);
+      ..write(obj.userId)
+      ..writeByte(5)
+      ..write(obj.soilMoisture)
+      ..writeByte(6)
+      ..write(obj.lightIntensity)
+      ..writeByte(7)
+      ..write(obj.phLevel)
+      ..writeByte(8)
+      ..write(obj.co2Level)
+      ..writeByte(9)
+      ..write(obj.airQuality)
+      ..writeByte(10)
+      ..write(obj.rainfall)
+      ..writeByte(11)
+      ..write(obj.windSpeed)
+      ..writeByte(12)
+      ..write(obj.weatherCondition)
+      ..writeByte(13)
+      ..write(obj.additionalData);
   }
 
   @override

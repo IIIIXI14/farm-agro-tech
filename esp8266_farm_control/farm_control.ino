@@ -89,7 +89,7 @@ void logActuatorTrigger(bool state, String source) {
   json.set("humidity", sensor.humidity);
   json.set("timestamp", "/.sv/timestamp");
   
-  if (Firebase.pushJSON(fbdo, "/users/" + userId + "/devices/" + deviceId + "/triggerLog", json)) {
+  if (Firebase.pushJSON(fbdo, "/Users/" + userId + "/devices/" + deviceId + "/triggerLog", json)) {
     Serial.println("📝 motor " + String(state ? "ON" : "OFF") + " by " + source);
   } else {
     Serial.println("❌ Failed to log trigger to Firebase");
@@ -111,7 +111,7 @@ void logAutomationEvent(String condition, String operator, float threshold, floa
   json.set("triggered", triggered);
   json.set("timestamp", "/.sv/timestamp");
   
-  if (Firebase.pushJSON(fbdo, "/users/" + userId + "/devices/" + deviceId + "/automationLog", json)) {
+  if (Firebase.pushJSON(fbdo, "/Users/" + userId + "/devices/" + deviceId + "/automationLog", json)) {
     Serial.println("📊 motor " + condition + " " + operator + " " + String(threshold) +
                   " (Current: " + String(currentValue) + ") -> " + String(triggered ? "TRIGGERED" : "No action"));
   } else {
@@ -142,7 +142,7 @@ void updateActuatorState() {
   FirebaseJson json;
   json.set("motor", stateJson);
   
-  if (Firebase.setJSON(fbdo, "/users/" + userId + "/devices/" + deviceId + "/actuatorStates", json)) {
+  if (Firebase.setJSON(fbdo, "/Users/" + userId + "/devices/" + deviceId + "/actuatorStates", json)) {
     // Success
   } else {
     Serial.println("❌ Failed to update actuator state in Firebase");
@@ -189,7 +189,7 @@ bool connectToFirebase() {
   Firebase.reconnectWiFi(true);
   
   // Test connection
-  if (Firebase.setString(fbdo, "/users/" + userId + "/devices/" + deviceId + "/status", "online")) {
+  if (Firebase.setString(fbdo, "/Users/" + userId + "/devices/" + deviceId + "/status", "online")) {
     firebaseConnected = true;
     firebaseRetryCount = 0;
     Serial.println("✅ Firebase connected successfully");
@@ -329,7 +329,7 @@ void updateSensorData() {
   json.set("humidity", sensor.humidity);
   json.set("timestamp", "/.sv/timestamp");
   
-  if (firebaseConnected && Firebase.setJSON(fbdo, "/users/" + userId + "/devices/" + deviceId + "/sensorData", json)) {
+  if (firebaseConnected && Firebase.setJSON(fbdo, "/Users/" + userId + "/devices/" + deviceId + "/sensorData", json)) {
     Serial.println("📊 Sensor data updated: " + String(sensor.temperature, 1) + "°C, " + String(sensor.humidity, 1) + "%");
   } else {
     Serial.println("❌ Failed to update sensor data in Firebase");
@@ -345,7 +345,7 @@ void updateHistoricalData() {
   json.set("timestamp", "/.sv/timestamp");
   
   if (firebaseConnected) {
-    Firebase.pushJSON(fbdo, "/users/" + userId + "/devices/" + deviceId + "/history", json);
+    Firebase.pushJSON(fbdo, "/Users/" + userId + "/devices/" + deviceId + "/history", json);
   }
 }
 
@@ -361,7 +361,7 @@ void checkAutomationRule() {
     return;
   }
   
-  String path = "/users/" + userId + "/devices/" + deviceId + "/automationRules";
+  String path = "/Users/" + userId + "/devices/" + deviceId + "/automationRules";
   if (!Firebase.getJSON(fbdo, path)) {
     Serial.println("❌ Failed to fetch automation rules");
     return;
@@ -425,7 +425,7 @@ void setActuatorState(bool state, unsigned long duration, String source) {
     
     logActuatorTrigger(state, source);
     
-    if (firebaseConnected && Firebase.setBool(fbdo, "/users/" + userId + "/devices/" + deviceId + "/actuators/motor", state)) {
+    if (firebaseConnected && Firebase.setBool(fbdo, "/Users/" + userId + "/devices/" + deviceId + "/actuators/motor", state)) {
       Serial.println("🚦 motor => " + String(state ? "ON" : "OFF") + " (Source: " + source + (duration > 0 ? ", Duration: " + String(duration/1000) + "s" : "") + ")");
     } else {
       Serial.println("⚠️  Failed to update actuator state in Firebase");
@@ -445,7 +445,7 @@ void checkDuration() {
 void checkSchedule() {
   if (!firebaseConnected) return;
   
-  String path = "/users/" + userId + "/devices/" + deviceId + "/schedules";
+  String path = "/Users/" + userId + "/devices/" + deviceId + "/schedules";
   if (!Firebase.getJSON(fbdo, path)) return;
   
   FirebaseJson* json = fbdo.jsonObjectPtr();
@@ -483,7 +483,7 @@ void checkSchedule() {
 void checkTestModeUpdate() {
   if (!firebaseConnected) return;
   
-  String path = "/users/" + userId + "/devices/" + deviceId + "/testMode";
+  String path = "/Users/" + userId + "/devices/" + deviceId + "/testMode";
   if (!Firebase.getJSON(fbdo, path)) return;
   
   FirebaseJson* json = fbdo.jsonObjectPtr();
@@ -501,7 +501,7 @@ void checkTestModeUpdate() {
 void checkActuatorUpdate() {
   if (!firebaseConnected) return;
   
-  String path = "/users/" + userId + "/devices/" + deviceId + "/actuators";
+  String path = "/Users/" + userId + "/devices/" + deviceId + "/actuators";
   if (!Firebase.getJSON(fbdo, path)) return;
   
   FirebaseJson* json = fbdo.jsonObjectPtr();

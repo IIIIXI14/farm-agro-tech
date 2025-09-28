@@ -1,13 +1,33 @@
 {
   "project_info": {
-    "project_number": "791742565126",
-    "project_id": "farmagrotech-7a3cf",
-    "storage_bucket": "farmagrotech-7a3cf.firebasestorage.app"
+    "project_number": "660239780604",
+    "firebase_url": "https://farmagrotech-7d3a7-default-rtdb.firebaseio.com",
+    "project_id": "farmagrotech-7d3a7",
+    "storage_bucket": "farmagrotech-7d3a7.firebasestorage.app"
   },
   "client": [
     {
       "client_info": {
-        "mobilesdk_app_id": "1:791742565126:android:71cedbeb7b232bc429ac87",
+        "mobilesdk_app_id": "1:660239780604:android:78d045513d36bfc8856579",
+        "android_client_info": {
+          "package_name": "com.example.farm_agro_tech"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyBZdyy7XT5YEIxvbS4GQ1Yb-7i-CSq1TUk"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:660239780604:android:bf87ffcf9f881569856579",
         "android_client_info": {
           "package_name": "com.harshal.farmagrotech"
         }
@@ -15,7 +35,7 @@
       "oauth_client": [],
       "api_key": [
         {
-          "current_key": "AIzaSyBlgom7hmUl3bclgcI7Byu1INlhqk3Eafo"
+          "current_key": "AIzaSyBZdyy7XT5YEIxvbS4GQ1Yb-7i-CSq1TUk"
         }
       ],
       "services": {

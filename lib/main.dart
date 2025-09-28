@@ -3,12 +3,27 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
 import 'package:hive_flutter/hive_flutter.dart';
+import 'package:firebase_app_check/firebase_app_check.dart';
+import 'package:timezone/data/latest.dart' as tz;
+import 'package:google_fonts/google_fonts.dart';
+import 'dart:io';
 import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/admin_dashboard_screen.dart';
+import 'screens/add_device_intro_screen.dart';
+import 'screens/add_device_config_screen.dart';
+import 'screens/add_device_wait_screen.dart';
+import 'screens/add_device_webview_screen.dart';
+import 'screens/my_devices_screen.dart';
+import 'screens/about_screen.dart';
 import 'services/theme_service.dart';
 import 'services/local_storage_service.dart';
+import 'services/notification_service.dart';
+import 'services/push_messaging_service.dart';
+import 'services/stream_manager.dart';
+// app_config not needed here after unconditional App Check activation
+import 'package:flutter/foundation.dart';
 import 'models/sensor_reading.dart';
 import 'models/device_state.dart';
 import 'models/automation_rule.dart';
@@ -16,6 +31,24 @@ import 'models/automation_rule.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await Firebase.initializeApp();
+  // Prevent network fetches for Google Fonts on captive/offline networks
+  GoogleFonts.config.allowRuntimeFetching = false;
+  // Enable Firebase App Check only if google domain resolves (avoid captive portal issues)
+  try {
+    final addrs = await InternetAddress.lookup('firebaseappcheck.googleapis.com');
+    if (addrs.isNotEmpty) {
+      await FirebaseAppCheck.instance.activate(
+        androidProvider: kReleaseMode ? AndroidProvider.playIntegrity : AndroidProvider.debug,
+        appleProvider: kReleaseMode ? AppleProvider.deviceCheck : AppleProvider.debug,
+        webProvider: ReCaptchaV3Provider('unused-for-mobile'),
+      );
+    }
+  } catch (_) {
+    // Skip App Check if DNS fails (likely device AP). Proceed without it.
+  }
+  
+  // Initialize timezone
+  tz.initializeTimeZones();
   
   // Initialize Hive for local storage
   await Hive.initFlutter();
@@ -34,6 +67,10 @@ void main() async {
   // Initialize local storage service
   await LocalStorageService().initialize();
   
+  // Initialize notification services
+  await NotificationService().initialize();
+  await PushMessagingService.initialize();
+  
   final themeService = await ThemeService.init();
   runApp(
     ChangeNotifierProvider.value(
@@ -43,8 +80,36 @@ void main() async {
   );
 }
 
-class MyApp extends StatelessWidget {
+class MyApp extends StatefulWidget {
   const MyApp({super.key});
+
+  @override
+  State<MyApp> createState() => _MyAppState();
+}
+
+class _MyAppState extends State<MyApp> with WidgetsBindingObserver {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    // Dispose streams only when app is actually closing
+    StreamManager.disposeStreamsOnAppClose();
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.detached) {
+      // App is being closed, dispose streams
+      StreamManager.disposeStreamsOnAppClose();
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -60,6 +125,27 @@ class MyApp extends StatelessWidget {
             '/login': (context) => const LoginScreen(),
             '/register': (context) => const RegisterScreen(),
             '/admin': (context) => const AdminDashboardScreen(),
+            '/add-device/intro': (context) {
+              final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+              return AddDeviceIntroScreen(uid: args?['uid'] ?? '');
+            },
+            '/add-device/config': (context) {
+              final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+              return AddDeviceConfigScreen(uid: args?['uid'] ?? '');
+            },
+            '/add-device/wait': (context) {
+              final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+              return AddDeviceWaitScreen(uid: args?['uid'] ?? '');
+            },
+            '/add-device/webview': (context) {
+              final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+              return AddDeviceWebViewScreen(uid: args?['uid'] ?? '');
+            },
+            '/my-devices': (context) {
+              final args = ModalRoute.of(context)?.settings.arguments as Map<String, dynamic>?;
+              return MyDevicesScreen(uid: args?['uid'] ?? '');
+            },
+            '/about': (context) => const AboutScreen(),
           },
         );
       },
@@ -85,92 +171,6 @@ class AuthWrapper extends StatelessWidget {
 
         return const LoginScreen();
       },
-    );
-  }
-}
-
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({super.key, required this.title});
-
-  // This widget is the home page of your application. It is stateful, meaning
-  // that it has a State object (defined below) that contains fields that affect
-  // how it looks.
-
-  // This class is the configuration for the state. It holds the values (in this
-  // case the title) provided by the parent (in this case the App widget) and
-  // used by the build method of the State. Fields in a Widget subclass are
-  // always marked "final".
-
-  final String title;
-
-  @override
-  State<MyHomePage> createState() => _MyHomePageState();
-}
-
-class _MyHomePageState extends State<MyHomePage> {
-  int _counter = 0;
-
-  void _incrementCounter() {
-    setState(() {
-      // This call to setState tells the Flutter framework that something has
-      // changed in this State, which causes it to rerun the build method below
-      // so that the display can reflect the updated values. If we changed
-      // _counter without calling setState(), then the build method would not be
-      // called again, and so nothing would appear to happen.
-      _counter++;
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
-    return Scaffold(
-      appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created by
-        // the App.build method, and use it to set our appbar title.
-        title: Text(widget.title),
-      ),
-      body: Center(
-        // Center is a layout widget. It takes a single child and positions it
-        // in the middle of the parent.
-        child: Column(
-          // Column is also a layout widget. It takes a list of children and
-          // arranges them vertically. By default, it sizes itself to fit its
-          // children horizontally, and tries to be as tall as its parent.
-          //
-          // Column has various properties to control how it sizes itself and
-          // how it positions its children. Here we use mainAxisAlignment to
-          // center the children vertically; the main axis here is the vertical
-          // axis because Columns are vertical (the cross axis would be
-          // horizontal).
-          //
-          // TRY THIS: Invoke "debug painting" (choose the "Toggle Debug Paint"
-          // action in the IDE, or press "p" in the console), to see the
-          // wireframe for each widget.
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            const Text('You have pushed the button this many times:'),
-            Text(
-              '$_counter',
-              style: Theme.of(context).textTheme.headlineMedium,
-            ),
-          ],
-        ),
-      ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _incrementCounter,
-        tooltip: 'Increment',
-        child: const Icon(Icons.add),
-      ), // This trailing comma makes auto-formatting nicer for build methods.
     );
   }
 }

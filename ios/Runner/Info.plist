@@ -45,5 +45,16 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+  <key>NSLocationWhenInUseUsageDescription</key>
+  <string>Location is used to help discover and connect to your device's Wi‑Fi during setup.</string>
+  <key>LSApplicationQueriesSchemes</key>
+  <array>
+    <string>App-Prefs</string>
+  </array>
+  <key>NSAppTransportSecurity</key>
+  <dict>
+    <key>NSAllowsArbitraryLoads</key>
+    <true/>
+  </dict>
 </dict>
 </plist>

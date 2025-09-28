@@ -101,7 +101,7 @@ class AdminService {
   static Future<void> deleteInactiveDevices() async {
     final devicesSnapshot = await FirebaseFirestore.instance
         .collectionGroup('devices')
-        .where('lastUpdate', isLessThan: Timestamp.fromDate(
+        .where('timestamp', isLessThan: Timestamp.fromDate(
           DateTime.now().subtract(const Duration(days: 30)),
         ))
         .where('status', isEqualTo: 'offline')

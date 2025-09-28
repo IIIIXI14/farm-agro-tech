@@ -1,5 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'log_service.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'app_config.dart';
+import 'notification_service.dart';
+import '../models/sensor_reading.dart';
 
 class AutomationRule {
   final String when;
@@ -34,23 +39,21 @@ class DeviceService {
 
   DeviceService(this.uid);
 
+  // Firestore list removed in favor of RTDB usage across UI
   Stream<QuerySnapshot> getDevicesStream() {
-    return FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .collection('devices')
-        .snapshots();
+    return const Stream.empty();
   }
 
   Future<void> updateDeviceName(String deviceId, String name) async {
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .collection('devices')
-        .doc(deviceId)
-        .update({
+    final db = FirebaseDatabase.instanceFor(
+      app: Firebase.app(),
+      databaseURL: AppConfig.realtimeDbUrl,
+    );
+    
+    // Update in user-scoped structure
+    await db.ref('Users/$uid/Devices/$deviceId/Meta').update({
       'name': name,
-      'lastUpdate': FieldValue.serverTimestamp(),
+      'updatedAtMs': DateTime.now().millisecondsSinceEpoch,
     });
 
     await LogService.logDeviceAction(
@@ -61,33 +64,42 @@ class DeviceService {
     );
   }
 
-  Future<void> updateActuator(String deviceId, String actuator, bool value) {
-    return FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .collection('devices')
-        .doc(deviceId)
-        .update({'actuators.$actuator': value});
+  Future<void> updateActuator(String deviceId, String actuator, bool value) async {
+    final db = FirebaseDatabase.instanceFor(
+      app: Firebase.app(),
+      databaseURL: AppConfig.realtimeDbUrl,
+    );
+    
+    // Update in user-scoped structure (Actuators for control and reflect status)
+    await db.ref('Users/$uid/Devices/$deviceId/Actuators/$actuator').set(value ? 'ON' : 'OFF');
+    await db.ref('Users/$uid/Devices/$deviceId/Actuator_Status/$actuator/status').set(value ? 'ON' : 'OFF');
   }
 
   Future<void> deleteDevice(String deviceId) async {
-    final deviceDoc = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .collection('devices')
-        .doc(deviceId)
-        .get();
-
-    final deviceName = deviceDoc.data()?['name'] as String? ?? 'Unknown Device';
-
-    await deviceDoc.reference.delete();
-
-    await LogService.logDeviceAction(
-      uid,
-      deviceId,
-      'Device deleted: $deviceName',
-      type: LogType.warning,
+    final db = FirebaseDatabase.instanceFor(
+      app: Firebase.app(),
+      databaseURL: AppConfig.realtimeDbUrl,
     );
+    
+    // Get device name from new structure first, fallback to old
+    String deviceName = 'Unknown Device';
+    final newMetaSnap = await db.ref('devices/$deviceId/Meta').get();
+    if (newMetaSnap.exists && newMetaSnap.value is Map) {
+      deviceName = Map<String, dynamic>.from(newMetaSnap.value as Map)['name']?.toString() ?? 'Unknown Device';
+    } else {
+      final oldMetaSnap = await db.ref('Users/$uid/devices/$deviceId/Meta').get();
+      if (oldMetaSnap.exists && oldMetaSnap.value is Map) {
+        deviceName = Map<String, dynamic>.from(oldMetaSnap.value as Map)['name']?.toString() ?? 'Unknown Device';
+      }
+    }
+    
+    // Delete from new devices collection
+    await db.ref('devices/$deviceId').remove();
+    
+    // Also delete from old structure for backward compatibility
+    await db.ref('Users/$uid/devices/$deviceId').remove();
+    
+    await LogService.logDeviceAction(uid, deviceId, 'Device deleted: $deviceName', type: LogType.warning);
   }
 
   Future<DocumentReference> addDevice(String name) {
@@ -97,12 +109,12 @@ class DeviceService {
         .collection('devices')
         .add({
           'name': name,
-          'status': 'offline',
-          'sensorData': {
+          'deviceStatus': 'offline',
+          'Sensor_Data': {
             'temperature': 0,
             'humidity': 0,
           },
-          'actuators': {
+          'Actuator_Status': {
             'motor': false,
             'light': false,
             'water': false,
@@ -129,15 +141,11 @@ class DeviceService {
     String actuator,
     AutomationRule rule,
   ) async {
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .collection('devices')
-        .doc(deviceId)
-        .update({
-      'automationRules.$actuator': rule.toMap(),
-      'lastUpdate': FieldValue.serverTimestamp(),
-    });
+    final db = FirebaseDatabase.instanceFor(
+      app: Firebase.app(),
+      databaseURL: AppConfig.realtimeDbUrl,
+    );
+    await db.ref('Users/$uid/devices/$deviceId/AutomationRules/$actuator').set(rule.toMap());
 
     await LogService.logDeviceAction(
       uid,
@@ -148,15 +156,11 @@ class DeviceService {
   }
 
   Future<void> deleteAutomationRule(String deviceId, String actuator) async {
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .collection('devices')
-        .doc(deviceId)
-        .update({
-      'automationRules.$actuator': FieldValue.delete(),
-      'lastUpdate': FieldValue.serverTimestamp(),
-    });
+    final db = FirebaseDatabase.instanceFor(
+      app: Firebase.app(),
+      databaseURL: AppConfig.realtimeDbUrl,
+    );
+    await db.ref('Users/$uid/devices/$deviceId/AutomationRules/$actuator').remove();
 
     await LogService.logDeviceAction(
       uid,
@@ -186,8 +190,8 @@ class DeviceService {
         .collection('devices')
         .doc(deviceId)
         .update({
-          'status': online ? 'online' : 'offline',
-          'lastUpdate': FieldValue.serverTimestamp(),
+          'deviceStatus': online ? 'online' : 'offline',
+          'timestamp': FieldValue.serverTimestamp(),
         });
   }
 
@@ -196,28 +200,37 @@ class DeviceService {
     double temperature,
     double humidity,
   ) async {
-    final deviceRef = FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .collection('devices')
-        .doc(deviceId);
-
-    // Get current sensor data for comparison
-    final deviceDoc = await deviceRef.get();
-    final currentData = Map<String, dynamic>.from(
-      deviceDoc.data()?['sensorData'] ?? {},
+    final db = FirebaseDatabase.instanceFor(
+      app: Firebase.app(),
+      databaseURL: AppConfig.realtimeDbUrl,
     );
-    final currentTemp = (currentData['temperature'] as num?)?.toDouble();
-    final currentHum = (currentData['humidity'] as num?)?.toDouble();
-
-    // Update sensor data
+    final deviceRef = db.ref('Users/$uid/Devices/$deviceId');
+    // Read current values
+    final snap = await deviceRef.child('Sensor_Data').get();
+    final currentMap = snap.exists && snap.value is Map
+        ? Map<String, dynamic>.from(snap.value as Map)
+        : <String, dynamic>{};
+    final currentTemp = (currentMap['temperature'] as num?)?.toDouble();
+    final currentHum = (currentMap['humidity'] as num?)?.toDouble();
     await deviceRef.update({
-      'sensorData': {
+      'Sensor_Data': {
         'temperature': temperature,
         'humidity': humidity,
       },
-      'lastUpdate': FieldValue.serverTimestamp(),
+      'lastSeen': DateTime.now().millisecondsSinceEpoch,
+      'deviceStatus': 'online',
     });
+
+    // Create sensor reading for notification check
+    final reading = SensorReading(
+      deviceId: deviceId,
+      temperature: temperature,
+      humidity: humidity,
+      timestamp: DateTime.now(),
+    );
+
+    // Check for sensor alerts
+    await NotificationService().checkSensorAlerts(reading, deviceId);
 
     // Check for significant changes (more than 5 units)
     if (currentTemp != null &&
@@ -236,21 +249,112 @@ class DeviceService {
   }
 
   Future<void> toggleActuator(String deviceId, String actuator, bool value) async {
-    await FirebaseFirestore.instance
-        .collection('users')
-        .doc(uid)
-        .collection('devices')
-        .doc(deviceId)
-        .update({
-      'actuators.$actuator': value,
-      'lastUpdate': FieldValue.serverTimestamp(),
-    });
+    final db = FirebaseDatabase.instanceFor(
+      app: Firebase.app(),
+      databaseURL: AppConfig.realtimeDbUrl,
+    );
+    final ref = db.ref('Users/$uid/devices/$deviceId/Actuator_Status/$actuator');
+    await ref.set(value ? 'ON' : 'OFF');
+  }
 
+  // Get actuator names for a device
+  Future<Map<String, String>> getActuatorNames(String deviceId) async {
+    final db = FirebaseDatabase.instanceFor(
+      app: Firebase.app(),
+      databaseURL: AppConfig.realtimeDbUrl,
+    );
+    final snapshot = await db.ref('Users/$uid/devices/$deviceId/Actuator_Names').get();
+    
+    if (snapshot.exists && snapshot.value is Map) {
+      final Map<String, dynamic> names = Map<String, dynamic>.from(snapshot.value as Map);
+      return names.map((key, value) => MapEntry(key, value.toString()));
+    }
+    
+    // Return default names if none exist
+    return {
+      'relay1': 'Motor Control',
+      'relay2': 'Water Pump',
+      'relay3': 'Lighting',
+      'relay4': 'Siren',
+      'relay5': 'Fan System',
+    };
+  }
+
+  // Toggle a specific relay
+  Future<void> toggleRelay(String deviceId, String relay, bool value) async {
+    await updateActuator(deviceId, relay, value);
+  }
+
+  // Turn all relays on
+  Future<void> turnAllRelaysOn(String deviceId) async {
+    final db = FirebaseDatabase.instanceFor(
+      app: Firebase.app(),
+      databaseURL: AppConfig.realtimeDbUrl,
+    );
+    
+    final updates = <String, String>{};
+    for (int i = 1; i <= 5; i++) {
+      updates['relay$i/status'] = 'ON';
+    }
+    
+    await db.ref('Users/$uid/devices/$deviceId/Actuator_Status').update(updates);
+    
     await LogService.logDeviceAction(
       uid,
       deviceId,
-      'Actuator $actuator turned ${value ? 'ON' : 'OFF'}',
-      type: value ? LogType.success : LogType.info,
+      'All relays turned ON',
+      type: LogType.info,
     );
   }
-} 
+
+  // Turn all relays off
+  Future<void> turnAllRelaysOff(String deviceId) async {
+    final db = FirebaseDatabase.instanceFor(
+      app: Firebase.app(),
+      databaseURL: AppConfig.realtimeDbUrl,
+    );
+    
+    final updates = <String, String>{};
+    for (int i = 1; i <= 5; i++) {
+      updates['relay$i/status'] = 'OFF';
+    }
+    
+    await db.ref('Users/$uid/devices/$deviceId/Actuator_Status').update(updates);
+    
+    await LogService.logDeviceAction(
+      uid,
+      deviceId,
+      'All relays turned OFF',
+      type: LogType.info,
+    );
+  }
+
+  // Emergency stop - turn off all actuators
+  Future<void> emergencyStop(String deviceId) async {
+    await turnAllRelaysOff(deviceId);
+    
+    await LogService.logDeviceAction(
+      uid,
+      deviceId,
+      'EMERGENCY STOP activated',
+      type: LogType.warning,
+    );
+  }
+
+  // Update actuator names
+  Future<void> updateActuatorNames(String deviceId, Map<String, String> names) async {
+    final db = FirebaseDatabase.instanceFor(
+      app: Firebase.app(),
+      databaseURL: AppConfig.realtimeDbUrl,
+    );
+    
+    await db.ref('Users/$uid/devices/$deviceId/Actuator_Names').set(names);
+    
+    await LogService.logDeviceAction(
+      uid,
+      deviceId,
+      'Actuator names updated',
+      type: LogType.info,
+    );
+  }
+}

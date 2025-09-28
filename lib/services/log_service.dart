@@ -1,4 +1,7 @@
-import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_database/firebase_database.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:flutter/foundation.dart';
+import 'app_config.dart';
 
 enum LogType {
   info,
@@ -14,13 +17,40 @@ class LogService {
     String? userId,
     String? deviceId,
   }) async {
-    await FirebaseFirestore.instance.collection('system_logs').add({
-      'message': message,
-      'type': type.name,
-      'userId': userId,
-      'deviceId': deviceId,
-      'timestamp': FieldValue.serverTimestamp(),
-    });
+    try {
+      final db = FirebaseDatabase.instanceFor(
+        app: Firebase.app(),
+        databaseURL: AppConfig.realtimeDbUrl,
+      );
+      
+      final logId = 'log_${DateTime.now().millisecondsSinceEpoch}';
+      
+      // Try to write to user-specific logs first, fall back to system logs
+      if (userId != null) {
+        await db.ref('Users/$userId/Logs/$logId').set({
+          'message': message,
+          'type': type.name,
+          'userId': userId,
+          'deviceId': deviceId,
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+      } else {
+        // For system logs, try to write to a user-accessible location
+        await db.ref('system_logs/$logId').set({
+          'message': message,
+          'type': type.name,
+          'userId': userId,
+          'deviceId': deviceId,
+          'timestamp': DateTime.now().millisecondsSinceEpoch,
+        });
+      }
+    } catch (e) {
+      // Silently fail for logging to avoid breaking the app
+      // Only print in debug mode to avoid spam
+      if (kDebugMode) {
+        print('LogService error: $e');
+      }
+    }
   }
 
   static Future<void> logUserAction(
@@ -28,19 +58,32 @@ class LogService {
     String action, {
     LogType type = LogType.info,
   }) async {
-    final userDoc = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(userId)
-        .get();
-    
-    final userName = userDoc.data()?['name'] as String? ?? 'Unknown User';
-    final userEmail = userDoc.data()?['email'] as String? ?? 'No Email';
+    try {
+      final db = FirebaseDatabase.instanceFor(
+        app: Firebase.app(),
+        databaseURL: AppConfig.realtimeDbUrl,
+      );
+      
+      // Get user info from Realtime Database
+      final userSnap = await db.ref('Users/$userId/Meta').get();
+      String userName = 'Unknown User';
+      String userEmail = 'No Email';
+      
+      if (userSnap.exists && userSnap.value is Map) {
+        final userData = Map<String, dynamic>.from(userSnap.value as Map);
+        userName = userData['name']?.toString() ?? 'Unknown User';
+        userEmail = userData['email']?.toString() ?? 'No Email';
+      }
 
-    await log(
-      'User Action: $action\nUser: $userName ($userEmail)',
-      type: type,
-      userId: userId,
-    );
+      await log(
+        'User Action: $action\nUser: $userName ($userEmail)',
+        type: type,
+        userId: userId,
+      );
+    } catch (e) {
+      // Silently fail for logging to avoid breaking the app
+      print('LogService error: $e');
+    }
   }
 
   static Future<void> logDeviceAction(
@@ -49,21 +92,31 @@ class LogService {
     String action, {
     LogType type = LogType.info,
   }) async {
-    final deviceDoc = await FirebaseFirestore.instance
-        .collection('users')
-        .doc(userId)
-        .collection('devices')
-        .doc(deviceId)
-        .get();
-    
-    final deviceName = deviceDoc.data()?['name'] as String? ?? 'Unknown Device';
+    try {
+      final db = FirebaseDatabase.instanceFor(
+        app: Firebase.app(),
+        databaseURL: AppConfig.realtimeDbUrl,
+      );
+      
+      // Get device info from Realtime Database
+      final deviceSnap = await db.ref('Users/$userId/devices/$deviceId/Meta').get();
+      String deviceName = 'Unknown Device';
+      
+      if (deviceSnap.exists && deviceSnap.value is Map) {
+        final deviceData = Map<String, dynamic>.from(deviceSnap.value as Map);
+        deviceName = deviceData['name']?.toString() ?? 'Unknown Device';
+      }
 
-    await log(
-      'Device Action: $action\nDevice: $deviceName ($deviceId)',
-      type: type,
-      userId: userId,
-      deviceId: deviceId,
-    );
+      await log(
+        'Device Action: $action\nDevice: $deviceName ($deviceId)',
+        type: type,
+        userId: userId,
+        deviceId: deviceId,
+      );
+    } catch (e) {
+      // Silently fail for logging to avoid breaking the app
+      print('LogService error: $e');
+    }
   }
 
   static Future<void> logSystemEvent(
@@ -77,4 +130,4 @@ class LogService {
     // TODO: Implement log export functionality
     // This could export logs to a CSV file or send them to a cloud storage
   }
-} 
+}

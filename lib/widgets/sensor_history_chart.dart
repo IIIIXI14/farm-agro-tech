@@ -64,7 +64,7 @@ class SensorHistoryChart extends StatelessWidget {
             padding: const EdgeInsets.all(16.0),
             child: LineChart(
               LineChartData(
-                gridData: FlGridData(
+                gridData: const FlGridData(
                   show: true,
                   drawVerticalLine: true,
                   horizontalInterval: 1,
@@ -133,7 +133,7 @@ class SensorHistoryChart extends StatelessWidget {
                     dotData: const FlDotData(show: false),
                     belowBarData: BarAreaData(
                       show: true,
-                      color: lineColor.withOpacity(0.1),
+                      color: lineColor.withValues(alpha: 0.1),
                     ),
                   ),
                 ],

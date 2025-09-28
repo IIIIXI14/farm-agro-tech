@@ -1,0 +1,11 @@
+<resources>
+    <string name="app_name">farm_agro_tech</string>
+    <!-- Facebook App ID is injected at build time via Gradle resValue. -->
+    <string name="facebook_app_id"></string>
+    <!-- Will be set to fb${FACEBOOK_APP_ID} at build time; keep empty by default. -->
+    <string name="fb_login_protocol_scheme"></string>
+    <!-- Client token for Facebook SDK (required for some Graph API calls) -->
+    <string name="facebook_client_token">REPLACE_WITH_FACEBOOK_CLIENT_TOKEN</string>
+</resources>
+
+

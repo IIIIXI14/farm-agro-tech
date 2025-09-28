@@ -1,0 +1,34 @@
+{
+  "flutter": {
+    "platforms": {
+      "android": {
+        "default": {
+          "projectId": "farmagrotech-7d3a7",
+          "appId": "1:660239780604:android:bf87ffcf9f881569856579",
+          "fileOutput": "android/app/google-services.json"
+        }
+      },
+      "dart": {
+        "lib/firebase_options.dart": {
+          "projectId": "farmagrotech-7d3a7",
+          "configurations": {
+            "android": "1:660239780604:android:bf87ffcf9f881569856579",
+            "ios": "1:660239780604:ios:06e309eee6cadb5d856579",
+            "macos": "1:660239780604:ios:06e309eee6cadb5d856579",
+            "web": "1:660239780604:web:bd0f9dd8851df18c856579",
+            "windows": "1:660239780604:web:bd0f9dd8851df18c856579"
+          }
+        }
+      }
+    }
+  },
+  "firestore": {
+    "rules": "firestore.rules"
+  },
+  "storage": {
+    "rules": "storage.rules"
+  },
+  "database": {
+    "rules": "database.rules.json"
+  }
+}
