@@ -63,7 +63,7 @@ class _SensorHistoryScreenState extends State<SensorHistoryScreen> with SingleTi
           app: Firebase.app(),
           databaseURL: AppConfig.realtimeDbUrl,
         );
-        final ref = db.ref('Users/${widget.uid}/devices/${widget.deviceId}/History');
+        final ref = db.ref('Users/${widget.uid}/Devices/${widget.deviceId}/History');
         final snap = await ref.get();
         if (snap.exists) {
           if (snap.value is List) {

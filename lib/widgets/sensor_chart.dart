@@ -25,8 +25,8 @@ class _SensorChartState extends State<SensorChart> {
   @override
   void initState() {
     super.initState();
-    // After a short timeout, if no points, show empty state instead of spinners
-    _fallbackTimer = Timer(const Duration(seconds: 3), () {
+    // After a longer timeout, if no points, show empty state instead of spinners
+    _fallbackTimer = Timer(const Duration(seconds: 10), () {
       if (!mounted) return;
       if (tempData.isEmpty && humData.isEmpty && soilMoistureData.isEmpty) {
         setState(() => _timedOut = true);
@@ -53,11 +53,17 @@ class _SensorChartState extends State<SensorChart> {
     _sub = ref.onValue.listen((event) {
       if (!mounted) return;
       final root = _asMap(event.snapshot.value);
-      final sensorData = _asMap(root['Sensor_Data'] is Map ? root['Sensor_Data'] : root['sensorData']);
+      // Try both Sensor_Data and sensorData keys for compatibility
+      final sensorData = _asMap(root['Sensor_Data'] ?? root['sensorData']);
+      
       if (sensorData.isNotEmpty) {
-        final t = ((sensorData['temperature'] ?? 0) as num).toDouble();
-        final h = ((sensorData['humidity'] ?? 0) as num).toDouble();
-        final sm = ((sensorData['soilMoisture'] ?? 0) as num).toDouble();
+        // Handle both soilMoisture and 'Soil Moisture' (with space)
+        final soilMoistureValue = sensorData['soilMoisture'] ?? sensorData['Soil Moisture'] ?? 0;
+        
+        final t = _parseToDouble(sensorData['temperature'] ?? 0);
+        final h = _parseToDouble(sensorData['humidity'] ?? 0);
+        final sm = _parseToDouble(soilMoistureValue);
+        
         final now = DateTime.now().millisecondsSinceEpoch.toDouble();
         setState(() {
           tempData.add(FlSpot(now, t));
@@ -79,6 +85,12 @@ class _SensorChartState extends State<SensorChart> {
     });
   }
 
+  double _parseToDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    if (value is String) return double.tryParse(value) ?? 0.0;
+    return 0.0;
+  }
+
   Widget _buildEmpty(String title) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -90,7 +102,40 @@ class _SensorChartState extends State<SensorChart> {
             style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
         ),
-        const SizedBox(height: 56, child: Center(child: Text('No data yet'))),
+        SizedBox(
+          height: 56,
+          child: Center(
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Text('No data yet'),
+                const SizedBox(height: 8),
+                ElevatedButton.icon(
+                  onPressed: () {
+                    setState(() {
+                      _timedOut = false;
+                    });
+                    _fallbackTimer?.cancel();
+                    _fallbackTimer = Timer(const Duration(seconds: 10), () {
+                      if (!mounted) return;
+                      if (tempData.isEmpty && humData.isEmpty && soilMoistureData.isEmpty) {
+                        setState(() => _timedOut = true);
+                      }
+                    });
+                    // Re-establish the listener
+                    _sub?.cancel();
+                    listenSensorUpdates();
+                  },
+                  icon: const Icon(Icons.refresh, size: 16),
+                  label: const Text('Retry'),
+                  style: ElevatedButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
       ],
     );
   }

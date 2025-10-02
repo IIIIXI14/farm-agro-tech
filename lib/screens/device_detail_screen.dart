@@ -7,6 +7,8 @@ import '../widgets/sensor_chart.dart';
 import '../services/device_service.dart';
 import '../services/log_service.dart';
 import '../services/app_config.dart';
+import 'dart:async'; // Added for Timer
+import '../services/notification_service.dart';
 
 class DeviceDetailScreen extends StatefulWidget {
   final String uid;
@@ -31,10 +33,50 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
   final Map<int, TextEditingController> _relayNameControllers = {};
   int _refreshKey = 0;
 
+  // Persisted schedule fields
+  int relaySel = 1;
+  String daySel = 'Monday';
+  TimeOfDay start = const TimeOfDay(hour: 6, minute: 0);
+  TimeOfDay stop = const TimeOfDay(hour: 6, minute: 5);
+
+  // Schedule executor
+  Timer? _scheduleTimer;
+  bool _scheduleEnabled = true;
+
+  String get _basePath => 'Users/${widget.uid}/Devices/${widget.deviceId}';
+
   @override
   void initState() {
     super.initState();
     _tabController = TabController(length: 3, vsync: this);
+    // Optionally, you can load persisted values here if needed
+    relaySel = 1;
+    daySel = 'Monday';
+    start = const TimeOfDay(hour: 6, minute: 0);
+    stop = const TimeOfDay(hour: 6, minute: 5);
+
+    // Start periodic schedule evaluation (every 30 seconds)
+    _scheduleTimer = Timer.periodic(const Duration(seconds: 10), (_) {
+      _evaluateSchedulesAndApply();
+    });
+    // Run once immediately
+    _evaluateSchedulesAndApply();
+
+    // Load current schedule automation toggle
+    () async {
+      try {
+        final db = FirebaseDatabase.instanceFor(
+          app: Firebase.app(),
+          databaseURL: AppConfig.realtimeDbUrl,
+        );
+        final val = await db.ref('$_basePath/Schedules/enabled').get();
+        if (mounted) {
+          setState(() {
+            _scheduleEnabled = (val.value as bool?) ?? true;
+          });
+        }
+      } catch (_) {}
+    }();
   }
 
   Future<void> _refreshData() async {
@@ -52,6 +94,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
     for (var controller in _relayNameControllers.values) {
       controller.dispose();
     }
+    _scheduleTimer?.cancel();
     super.dispose();
   }
 
@@ -92,10 +135,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
     }
     
     if (updates.isNotEmpty) {
-      // Update in new devices collection
-      await db.ref('devices/${widget.deviceId}/Actuator_Names').update(updates);
-      // Also update in old structure for backward compatibility
-      await db.ref('Users/${widget.uid}/devices/${widget.deviceId}/Actuator_Names').update(updates);
+      await db.ref('$_basePath/Actuator_Names').update(updates);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Relay names updated')),
@@ -153,7 +193,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
       appBar: AppBar(
         title: StreamBuilder<DatabaseEvent>(
           key: ValueKey('device_title_${widget.deviceId}_$_refreshKey'),
-          stream: db.ref('devices/${widget.deviceId}').onValue.asBroadcastStream(),
+          stream: db.ref(_basePath).onValue.asBroadcastStream(),
           builder: (context, snapshot) {
             final root = snapshot.hasData && snapshot.data!.snapshot.value is Map
                 ? Map<String, dynamic>.from(snapshot.data!.snapshot.value as Map)
@@ -221,23 +261,29 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
 
   Widget _buildDeviceOnlineBanner(FirebaseDatabase db) {
     return StreamBuilder<DatabaseEvent>(
-      stream: db.ref('devices/${widget.deviceId}').onValue.asBroadcastStream(),
+      stream: db.ref(_basePath).onValue.asBroadcastStream(),
       builder: (context, snapshot) {
         final root = snapshot.hasData && snapshot.data!.snapshot.value is Map
             ? Map<String, dynamic>.from(snapshot.data!.snapshot.value as Map)
             : <String, dynamic>{};
-        final meta = _asMap(root['Meta']);
-        final deviceStatus = _asMap(root['deviceStatus']);
-        final last = deviceStatus['last_seen'] ?? meta['updatedAtMs'];
-        int lastMs = 0;
-        if (last is int) lastMs = last;
-        if (last is double) lastMs = last.toInt();
-        if (last is String) {
-          final d = DateTime.tryParse(last);
-          if (d != null) lastMs = d.millisecondsSinceEpoch;
+        // Device is considered online if sensor data is being updated regularly
+        final sensorDataRaw = root['Sensor_Data'] is Map ? root['Sensor_Data'] : root['sensorData'];
+        final sensorData = _asMap(sensorDataRaw);
+        final sensorTimestamp = sensorData['timestamp'] ?? sensorData['lastUpdate'] ?? root['lastSeen'] ?? 0;
+        int sensorTimestampMs = 0;
+        if (sensorTimestamp is int) {
+          sensorTimestampMs = sensorTimestamp;
+        } else if (sensorTimestamp is double) {
+          sensorTimestampMs = sensorTimestamp.toInt();
+        } else if (sensorTimestamp is String) {
+          final parsed = DateTime.tryParse(sensorTimestamp);
+          if (parsed != null) {
+            sensorTimestampMs = parsed.millisecondsSinceEpoch;
+          }
         }
-        final bool isOnline = lastMs > 0 && (DateTime.now().millisecondsSinceEpoch - lastMs) <= 30000;
-        DateTime? lastSeen = lastMs > 0 ? DateTime.fromMillisecondsSinceEpoch(lastMs) : null;
+        final now = DateTime.now().millisecondsSinceEpoch;
+        final bool isOnline = sensorTimestampMs > 0 && (now - sensorTimestampMs) <= 60000;
+        DateTime? lastSeen = sensorTimestampMs > 0 ? DateTime.fromMillisecondsSinceEpoch(sensorTimestampMs) : null;
 
         if (root.isEmpty) return const SizedBox.shrink();
 
@@ -277,7 +323,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
   Widget _buildDeviceStatusCard(FirebaseDatabase db) {
     return StreamBuilder<DatabaseEvent>(
       key: ValueKey('device_status_${widget.deviceId}_$_refreshKey'),
-      stream: db.ref('devices/${widget.deviceId}').onValue.asBroadcastStream().timeout(
+      stream: db.ref(_basePath).onValue.asBroadcastStream().timeout(
         const Duration(seconds: 10),
         onTimeout: (eventSink) {
           eventSink.addError('Connection timeout. Please check your internet connection.');
@@ -331,7 +377,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
         }
         final root = Map<String, dynamic>.from(snapshot.data!.snapshot.value as Map);
         final meta = _asMap(root['Meta']);
-        final deviceStatus = _asMap(root['deviceStatus']);
+        final deviceStatus = _asMap(root['DeviceStatus']);
+        final stateValue = deviceStatus['state']?.toString().toUpperCase();
         final last = deviceStatus['last_seen'] ?? meta['updatedAtMs'] ?? 0;
         int lastMs = 0;
         if (last is int) lastMs = last;
@@ -340,7 +387,21 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
           final d = DateTime.tryParse(last);
           if (d != null) lastMs = d.millisecondsSinceEpoch;
         }
-        final bool isOnline = lastMs > 0 && (DateTime.now().millisecondsSinceEpoch - lastMs) <= 30000;
+        
+        // Determine online status from DeviceStatus/state and last_seen
+        bool isOnline = false;
+        if (stateValue == 'ONLINE') {
+          if (lastMs > 0) {
+            isOnline = (DateTime.now().millisecondsSinceEpoch - lastMs) <= 60000; // 60s window
+          } else {
+            isOnline = true; // State says online but no timestamp
+          }
+        } else if (stateValue == 'OFFLINE') {
+          isOnline = false;
+        } else {
+          // Fallback to timestamp only
+          isOnline = lastMs > 0 && (DateTime.now().millisecondsSinceEpoch - lastMs) <= 60000;
+        }
         final createdMs = (meta['createdAtMs'] ?? 0) as int;
         final updatedMs = (meta['updatedAtMs'] ?? createdMs) as int;
 
@@ -359,7 +420,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      'deviceStatus: ${isOnline ? 'ONLINE' : 'OFFLINE'}',
+                      'deviceStatus: ${stateValue ?? (isOnline ? 'ONLINE' : 'OFFLINE')}',
                       style: TextStyle(
                         color: isOnline ? Colors.green : Colors.red,
                         fontWeight: FontWeight.w600,
@@ -407,7 +468,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
         app: Firebase.app(),
         databaseURL: AppConfig.realtimeDbUrl,
       )
-      .ref('devices/${widget.deviceId}')
+      .ref(_basePath)
       .onValue
       .asBroadcastStream(),
       builder: (context, snapshot) {
@@ -434,9 +495,14 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
       );
     }
 
-    final temperature = ((sensorData['temperature'] ?? 0) as num).toDouble();
-    final humidity = ((sensorData['humidity'] ?? 0) as num).toDouble();
-    final soilMoisture = ((sensorData['Soil Moisture'] ?? 0) as num).toDouble();
+    double _toDouble(dynamic v) {
+      if (v is num) return v.toDouble();
+      if (v is String) return double.tryParse(v) ?? 0.0;
+      return 0.0;
+    }
+    final temperature = _toDouble(sensorData['temperature'] ?? 0);
+    final humidity = _toDouble(sensorData['humidity'] ?? 0);
+    final soilMoisture = _toDouble(sensorData['Soil Moisture'] ?? sensorData['soilMoisture'] ?? 0);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -475,7 +541,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                       soilMoisture,
                       '%',
                       Icons.water_drop,
-                      soilMoisture >= 30 && soilMoisture <= 80 ? Colors.green : Colors.red,
+                      soilMoisture >= 0 && soilMoisture <= 100 ? Colors.green : Colors.red,
                       compact: true,
                     ),
                   ),
@@ -515,7 +581,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                 soilMoisture,
                 '%',
                 Icons.water_drop,
-                soilMoisture >= 30 && soilMoisture <= 80 ? Colors.green : Colors.red,
+                soilMoisture >= 0 && soilMoisture <= 100 ? Colors.green : Colors.red,
                 compact: compact,
               ),
             ),
@@ -554,7 +620,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                 app: Firebase.app(),
                 databaseURL: AppConfig.realtimeDbUrl,
               )
-              .ref('devices/${widget.deviceId}/TriggerLog')
+              .ref('$_basePath/TriggerLog')
               .limitToLast(5)
               .onValue
               .asBroadcastStream(),
@@ -626,7 +692,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                 app: Firebase.app(),
                 databaseURL: AppConfig.realtimeDbUrl,
               )
-              .ref('devices/${widget.deviceId}/AutomationRules')
+              .ref('$_basePath/AutomationRules')
               .onValue
               .asBroadcastStream(),
               builder: (context, snapshot) {
@@ -653,10 +719,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                             app: Firebase.app(),
                             databaseURL: AppConfig.realtimeDbUrl,
                           );
-                          // Remove from new devices collection
-                          await db.ref('devices/${widget.deviceId}/AutomationRules/$actuator').remove();
-                          // Also remove from old structure for backward compatibility
-                          await db.ref('Users/${widget.uid}/devices/${widget.deviceId}/AutomationRules/$actuator').remove();
+                          await db.ref('$_basePath/AutomationRules/$actuator').remove();
                         },
                       ),
                     );
@@ -721,7 +784,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                 app: Firebase.app(),
                 databaseURL: AppConfig.realtimeDbUrl,
               )
-              .ref('devices/${widget.deviceId}')
+              .ref(_basePath)
               .onValue
               .asBroadcastStream(),
               builder: (context, snapshot) {
@@ -734,15 +797,20 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                 if (sensorData.isEmpty) {
                   return const Text('No sensor data available');
                 }
+                double _toDouble(dynamic v) {
+                  if (v is num) return v.toDouble();
+                  if (v is String) return double.tryParse(v) ?? 0.0;
+                  return 0.0;
+                }
                 final sensors = [
-                  {'name': 'Temperature', 'value': ((sensorData['temperature'] ?? 0) as num).toDouble(), 'unit': '°C', 'icon': Icons.thermostat},
-                  {'name': 'Humidity', 'value': ((sensorData['humidity'] ?? 0) as num).toDouble(), 'unit': '%', 'icon': Icons.water_drop},
-                  {'name': 'Soil Moisture', 'value': ((sensorData['soilMoisture'] ?? 0) as num).toDouble(), 'unit': '%', 'icon': Icons.grass},
+                  {'name': 'Temperature', 'value': _toDouble(sensorData['temperature'] ?? 0), 'unit': '°C', 'icon': Icons.thermostat},
+                  {'name': 'Humidity', 'value': _toDouble(sensorData['humidity'] ?? 0), 'unit': '%', 'icon': Icons.water_drop},
+                  {'name': 'Soil Moisture', 'value': _toDouble(sensorData['soilMoisture'] ?? sensorData['Soil Moisture'] ?? 0), 'unit': '%', 'icon': Icons.grass},
                 ];
 
                 return Column(
                   children: sensors.map((sensor) {
-                    final value = (sensor['value'] as num).toDouble();
+                    final value = sensor['value'] is num ? (sensor['value'] as num).toDouble() : double.tryParse('${sensor['value']}') ?? 0.0;
                     final isNormal = _isSensorValueNormal(sensor['name'] as String, value);
 
                     return ListTile(
@@ -822,10 +890,37 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
       children: [
         _buildActuatorControls(),
         const SizedBox(height: 16),
-        _buildSchedulesEditor(),
+        _buildScheduleAutomationToggle(),
         const SizedBox(height: 16),
-        _buildTestModeControls(),
+        _buildSchedulesEditor(),
+        // Removed Test Mode card
       ],
+    );
+  }
+
+  Widget _buildScheduleAutomationToggle() {
+    return Card(
+      child: ListTile(
+        leading: const Icon(Icons.schedule),
+        title: const Text('Schedule Automation'),
+        subtitle: const Text('Automatically toggle relays according to schedules'),
+        trailing: Switch(
+          value: _scheduleEnabled,
+          onChanged: (val) async {
+            setState(() { _scheduleEnabled = val; });
+            try {
+              final db = FirebaseDatabase.instanceFor(
+                app: Firebase.app(),
+                databaseURL: AppConfig.realtimeDbUrl,
+              );
+              await db.ref('$_basePath/Schedules/enabled').set(val);
+              if (val) {
+                _evaluateSchedulesAndApply();
+              }
+            } catch (_) {}
+          },
+        ),
+      ),
     );
   }
 
@@ -857,7 +952,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                 app: Firebase.app(),
                 databaseURL: AppConfig.realtimeDbUrl,
               )
-              .ref('devices/${widget.deviceId}')
+              .ref(_basePath)
               .onValue
               .asBroadcastStream()
               .timeout(
@@ -919,19 +1014,15 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                 }
 
                 final root = Map<String, dynamic>.from(snapshot.data!.snapshot.value as Map);
-                final actuators = Map<String, dynamic>.from(root['Actuator_Status'] ?? {});
+                final actuators = Map<String, dynamic>.from(root['Actuators'] ?? {});
                 final statuses = Map<String, dynamic>.from(root['Actuator_Status'] ?? {});
                 final actuatorNames = Map<String, dynamic>.from(root['Actuator_Names'] ?? {});
 
                 String relayValue(int n) {
-                  final status = actuators['relay$n'];
-                  if (status is bool) {
-                    return status ? 'ON' : 'OFF';
-                  } else if (status is String) {
-                    return status;
-                  } else if (status is Map) {
-                    return (status['status'] ?? 'OFF').toString();
-                  }
+                  final v = actuators['relay$n'];
+                  if (v is bool) return v ? 'ON' : 'OFF';
+                  if (v is String) return v; // ON/OFF/AUTO
+                  if (v is Map) return (v['mode'] ?? v['status'] ?? 'OFF').toString();
                   return 'OFF';
                 }
                 String relayStatus(int n) {
@@ -944,6 +1035,13 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                     return status;
                   }
                   return 'Unknown';
+                }
+                String relayMode(int n) {
+                  final status = statuses['relay$n'];
+                  if (status is Map) {
+                    return (status['mode'] ?? 'MANUAL').toString().toUpperCase();
+                  }
+                  return 'MANUAL';
                 }
 
                 Widget relayTile({
@@ -977,7 +1075,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                               ),
                             )
                           : Text(relayName),
-                        subtitle: Text(statusText),
+                        subtitle: Text(
+                          '${statusText}${relayMode(n) == 'AUTO' ? ' • Auto by schedule' : ''}',
+                        ),
                         trailing: _isEditingRelayNames 
                           ? null
                           : DropdownButton<String>(
@@ -1017,7 +1117,9 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                             ),
                           )
                         : Text(relayName),
-                      subtitle: Text(statusText),
+                      subtitle: Text(
+                        '${statusText}${relayMode(n) == 'AUTO' ? ' • Auto by schedule' : ''}',
+                      ),
                       trailing: _isEditingRelayNames 
                         ? null
                         : Switch(
@@ -1082,15 +1184,20 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                 app: Firebase.app(),
                 databaseURL: AppConfig.realtimeDbUrl,
               )
-              .ref('Users/${widget.uid}/devices/${widget.deviceId}/Sensor_Threshold')
+              .ref('$_basePath/Sensor_Threshold')
               .onValue,
               builder: (context, snapshot) {
                 final map = snapshot.hasData && snapshot.data!.snapshot.value != null
                     ? Map<String, dynamic>.from(snapshot.data!.snapshot.value as Map)
                     : <String, dynamic>{};
-                moistureCtl.text = ((map['Moisture_Thres'] ?? 50) as num).toString();
-                tempCtl.text = ((map['Temperature_Thres'] ?? 100) as num).toString();
-                humCtl.text = ((map['Humidity_Thres'] ?? 0) as num).toString();
+                String _toStringNum(dynamic v, String def) {
+                  if (v is num) return v.toString();
+                  if (v is String && double.tryParse(v) != null) return v;
+                  return def;
+                }
+                moistureCtl.text = _toStringNum(map['Moisture_Thres'], '50');
+                tempCtl.text = _toStringNum(map['Temperature_Thres'], '100');
+                humCtl.text = _toStringNum(map['Humidity_Thres'], '0');
 
                 return Column(
                   children: [
@@ -1126,7 +1233,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                                 databaseURL: AppConfig.realtimeDbUrl,
                               );
                               // Update in new devices collection
-                              await db.ref('devices/${widget.deviceId}/Sensor_Threshold').update({
+                              await db.ref('$_basePath/Sensor_Threshold').update({
                                 'Moisture_Thres': m,
                                 'Temperature_Thres': temp,
                                 'Humidity_Thres': hum,
@@ -1206,11 +1313,173 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
     return '$h:$m';
   }
 
+  String _currentDayName() {
+    const days = [
+      'Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'
+    ];
+    return days[DateTime.now().weekday % 7];
+  }
+
+  bool _isWithinRange(int curH, int curM, int startH, int startM, int stopH, int stopM) {
+    final cur = curH * 60 + curM;
+    final a = startH * 60 + startM;
+    final b = stopH * 60 + stopM;
+    if (a <= b) {
+      return cur >= a && cur < b; // same-day range
+    }
+    // Overnight range (e.g., 22:00 to 06:00)
+    return cur >= a || cur < b;
+  }
+
+  Future<void> _evaluateSchedulesAndApply() async {
+    try {
+      final db = FirebaseDatabase.instanceFor(
+        app: Firebase.app(),
+        databaseURL: AppConfig.realtimeDbUrl,
+      );
+      final baseRef = db.ref(_basePath);
+      final snap = await baseRef.get();
+      if (!snap.exists || snap.value is! Map) return;
+      final root = Map<String, dynamic>.from(snap.value as Map);
+
+      final schedulesRootRaw = (root['Schedules'] ?? {});
+      final schedulesRoot = schedulesRootRaw is Map ? Map<String, dynamic>.from(schedulesRootRaw) : <String, dynamic>{};
+      // Respect remote toggle
+      final enabled = (schedulesRoot['enabled'] as bool?) ?? true;
+      if (mounted && _scheduleEnabled != enabled) {
+        setState(() { _scheduleEnabled = enabled; });
+      }
+
+      final whichRelay = ((schedulesRoot['Schedule_1'] ?? {}) as Map?)?['Which_Relay'] ?? {};
+      final schedulesMap = whichRelay is Map ? Map<String, dynamic>.from(whichRelay) : <String, dynamic>{};
+
+      final actuators = Map<String, dynamic>.from((root['Actuators'] ?? {}) as Map? ?? {});
+
+      // Read current sensors and thresholds
+      Map<String, dynamic> sensorData = {};
+      final sd = root['Sensor_Data'];
+      if (sd is Map) sensorData = Map<String, dynamic>.from(sd);
+      final st = root['Sensor_Threshold'];
+      final thresholds = st is Map ? Map<String, dynamic>.from(st) : <String, dynamic>{};
+
+      double _toDouble(dynamic v) {
+        if (v is num) return v.toDouble();
+        if (v is String) return double.tryParse(v) ?? 0.0;
+        return 0.0;
+      }
+
+      final temp = _toDouble(sensorData['temperature'] ?? 0);
+      final hum = _toDouble(sensorData['humidity'] ?? 0);
+      final moisture = _toDouble(sensorData['soilMoisture'] ?? sensorData['Soil Moisture'] ?? 0);
+
+      final thTemp = _toDouble(thresholds['Temperature_Thres'] ?? 0);
+      final thHum = _toDouble(thresholds['Humidity_Thres'] ?? 0);
+      final thMoist = _toDouble((thresholds['Moisture_Thres'] ?? 0));
+
+      // Determine if thresholds suggest turning Relay 1 ON
+      final thresholdsSuggestOn = temp > thTemp || (thHum > 0 && hum < thHum) || (thMoist > 0 && moisture < thMoist);
+
+      // Compute schedule ON/OFF per relay
+      final now = DateTime.now();
+      final curDay = _currentDayName();
+      final curH = now.hour;
+      final curM = now.minute;
+
+      bool anyChange = false;
+      for (int relay = 1; relay <= 5; relay++) {
+        final key = 'relay$relay';
+
+        // Read actuator intent (AUTO/ON/OFF)
+        String actuatorIntent;
+        final current = actuators[key];
+        if (current is bool) {
+          actuatorIntent = current ? 'ON' : 'OFF';
+        } else if (current is String) {
+          actuatorIntent = current.toUpperCase();
+        } else if (current is Map) {
+          actuatorIntent = (current['mode'] ?? current['status'] ?? 'OFF').toString().toUpperCase();
+        } else {
+          actuatorIntent = 'OFF';
+        }
+
+        final isAuto = actuatorIntent == 'AUTO';
+
+        // When not AUTO → treat as MANUAL and never override user's choice
+        if (!isAuto) {
+          // Just mirror current manual status into Actuator_Status and continue
+          final manualStatus = actuatorIntent == 'ON' ? 'ON' : 'OFF';
+          await baseRef.child('Actuator_Status/$key').update({
+            'status': manualStatus,
+            'mode': 'MANUAL',
+            'updatedAtMs': DateTime.now().millisecondsSinceEpoch,
+          });
+          continue;
+        }
+
+        // Schedule evaluation (only if schedules are enabled AND relay in AUTO)
+        bool scheduleOn = false;
+        if (enabled) {
+          final relaySchedulesRaw = schedulesMap[key];
+          if (relaySchedulesRaw is Map) {
+            final relaySchedules = Map<String, dynamic>.from(relaySchedulesRaw);
+            for (final entry in relaySchedules.values) {
+              if (entry is Map) {
+                final s = Map<String, dynamic>.from(entry);
+                final day = (s['day'] ?? '').toString();
+                final sh = (s['startHour'] ?? 0) as int;
+                final sm = (s['startMinute'] ?? 0) as int;
+                final eh = (s['stopHour'] ?? 0) as int;
+                final em = (s['stopMinute'] ?? 0) as int;
+                if (day == curDay && _isWithinRange(curH, curM, sh, sm, eh, em)) {
+                  scheduleOn = true;
+                  break;
+                }
+              }
+            }
+          }
+        }
+
+        // For Relay 1: combine schedules with thresholds when AUTO
+        bool autoThresholdOn = false;
+        if (relay == 1) {
+          autoThresholdOn = thresholdsSuggestOn; // Only considered because we are in AUTO already
+        }
+
+        final targetOn = scheduleOn || autoThresholdOn;
+        final target = targetOn ? 'ON' : 'OFF';
+
+        // Apply automation target
+        await baseRef.child('Actuators/$key').set(target);
+        await baseRef.child('Actuator_Status/$key').update({
+          'status': target,
+          'mode': 'AUTO',
+          'updatedAtMs': DateTime.now().millisecondsSinceEpoch,
+        });
+        anyChange = true;
+
+        // Fire notification when automation flips/sets target
+        final reason = [
+          if (scheduleOn) 'schedule',
+          if (autoThresholdOn) 'thresholds',
+        ].join(' & ');
+        try {
+          await NotificationService().sendAutomationAlert(
+            widget.deviceId,
+            'relay$relay',
+            reason.isEmpty ? 'automation' : reason,
+          );
+        } catch (_) {}
+      }
+
+      if (anyChange && mounted) {
+        setState(() {});
+      }
+    } catch (e) {
+      // Best-effort; swallow errors to avoid UI disruption
+    }
+  }
+
   Widget _buildSchedulesEditor() {
-    int relaySel = 1;
-    String daySel = 'Monday';
-    TimeOfDay start = const TimeOfDay(hour: 6, minute: 0);
-    TimeOfDay stop = const TimeOfDay(hour: 6, minute: 5);
     final bool invalidRange =
         (stop.hour * 60 + stop.minute) <= (start.hour * 60 + start.minute);
 
@@ -1285,7 +1554,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                     if (res != null) setState(() { start = res; });
                   },
                   icon: const Icon(Icons.play_arrow),
-                  label: Text('Start ${_formatTime24(start)}'),
+                  label: Text('Start  ${_formatTime24(start)}'),
                 );
                 final right = OutlinedButton.icon(
                   onPressed: () async {
@@ -1340,7 +1609,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                     app: Firebase.app(),
                     databaseURL: AppConfig.realtimeDbUrl,
                   );
-                  final path = 'devices/${widget.deviceId}/Schedules/Schedule_1/Which_Relay/relay$relaySel';
+                  final path = '$_basePath/Schedules/Schedule_1/Which_Relay/relay$relaySel';
                   final newRef = db.ref(path).push();
                   await newRef.set({
                     'day': daySel,
@@ -1353,6 +1622,8 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(content: Text('Schedule added')),
                     );
+                    // Re-evaluate immediately after adding
+                    _evaluateSchedulesAndApply();
                   }
                 },
                 icon: const Icon(Icons.add),
@@ -1365,7 +1636,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                 app: Firebase.app(),
                 databaseURL: AppConfig.realtimeDbUrl,
               )
-              .ref('devices/${widget.deviceId}/Schedules/Schedule_1/Which_Relay')
+              .ref('$_basePath/Schedules/Schedule_1/Which_Relay')
               .onValue,
               builder: (context, snapshot) {
                 if (!snapshot.hasData || snapshot.data!.snapshot.value == null) {
@@ -1395,10 +1666,10 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
                               app: Firebase.app(),
                               databaseURL: AppConfig.realtimeDbUrl,
                             );
-                            // Remove from new devices collection
-                            await db.ref('devices/${widget.deviceId}/Schedules/Schedule_1/Which_Relay/$relayKey/$entryId').remove();
-                            // Also remove from old structure for backward compatibility
-                            await db.ref('Users/${widget.uid}/devices/${widget.deviceId}/Schedules/Schedule_1/Which_Relay/$relayKey/$entryId').remove();
+                            await db.ref('$_basePath/Schedules/Schedule_1/Which_Relay/$relayKey/$entryId').remove();
+                            if (mounted) {
+                              _evaluateSchedulesAndApply();
+                            }
                           },
                         ),
                       ),
@@ -1414,42 +1685,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
     );
   }
 
-  Widget _buildTestModeControls() {
-    return Card(
-      child: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(
-              'Test Mode',
-              style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-            const SizedBox(height: 8),
-            Text(
-              'Test mode allows manual control without automation interference',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                color: Colors.grey[600],
-              ),
-            ),
-            const SizedBox(height: 16),
-            ElevatedButton.icon(
-              onPressed: () => _enableTestMode(),
-              icon: const Icon(Icons.science),
-              label: const Text('Enable Test Mode'),
-              style: ElevatedButton.styleFrom(
-                backgroundColor: Colors.orange,
-                foregroundColor: Colors.white,
-              ),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   // Helper methods
   bool _isSensorValueNormal(String sensorName, double value) {
     switch (sensorName.toLowerCase()) {
@@ -1458,7 +1693,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
       case 'humidity':
         return value >= 30 && value <= 80;
       case 'soil moisture':
-        return value >= 20 && value <= 80;
+        return value >= 0 && value <= 100;
       case 'light intensity':
         return value >= 0 && value <= 100000;
       default:
@@ -1476,7 +1711,7 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
           databaseURL: AppConfig.realtimeDbUrl,
         );
         // Try new devices collection first, fallback to old structure
-        db.ref('devices/${widget.deviceId}/Meta').get().then((snap) {
+        db.ref('$_basePath/Meta').get().then((snap) {
           if (snap.exists && snap.value is Map) {
             final data = Map<String, dynamic>.from(snap.value as Map);
             _nameController.text = (data['name'] ?? '').toString();
@@ -1556,13 +1791,6 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
   }
 
 
-  void _enableTestMode() {
-    // Implementation for enabling test mode
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Test mode enabled')),
-    );
-  }
-
   void _setRelayValue(int relayNumber, String value) async {
     final db = FirebaseDatabase.instanceFor(
       app: Firebase.app(),
@@ -1570,9 +1798,17 @@ class _DeviceDetailScreenState extends State<DeviceDetailScreen>
     );
     // Convert string value to boolean for Actuator_Status
     final boolValue = value == 'ON';
-    await db
-        .ref('devices/${widget.deviceId}/Actuator_Status/relay$relayNumber')
-        .set(boolValue);
+    // 1) Write control intent to Actuators (string value: ON/OFF/AUTO)
+    await db.ref('$_basePath/Actuators/relay$relayNumber').set(value);
+    // 2) Update Actuator_Status: store mode and status
+    if (value == 'AUTO') {
+      await db.ref('$_basePath/Actuator_Status/relay$relayNumber/mode').set('AUTO');
+    } else {
+      await db.ref('$_basePath/Actuator_Status/relay$relayNumber').update({
+        'status': boolValue ? 'ON' : 'OFF',
+        'mode': 'MANUAL',
+      });
+    }
     await LogService.logDeviceAction(
       widget.uid,
       widget.deviceId,

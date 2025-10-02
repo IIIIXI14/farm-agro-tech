@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_database/firebase_database.dart' as rtdb;
 import 'package:firebase_core/firebase_core.dart';
 import '../services/app_config.dart';
+import 'device_detail_screen.dart';
 
 class AddDeviceWaitScreen extends StatefulWidget {
   final String uid;
@@ -69,7 +70,17 @@ class _AddDeviceWaitScreenState extends State<AddDeviceWaitScreen> {
           // Try to fetch latest data from realtime database
           await _fetchLatestDataFromRealtimeDb();
           _found = true;
-          Navigator.popUntil(context, (route) => route.isFirst);
+          // Navigate directly to the device details screen
+          if (!mounted) return;
+          Navigator.pushReplacement(
+            context,
+            MaterialPageRoute(
+              builder: (_) => DeviceDetailScreen(
+                uid: widget.uid,
+                deviceId: widget.deviceId!,
+              ),
+            ),
+          );
         }
       }
     });
@@ -100,7 +111,13 @@ class _AddDeviceWaitScreenState extends State<AddDeviceWaitScreen> {
         final hasSensorData = sensorData is Map && sensorData.isNotEmpty;
         if (status == 'online' || hasSensorData) {
           _found = true;
-          Navigator.popUntil(context, (route) => route.isFirst);
+          // Fallback navigation when we don't know deviceId for detail screen
+          if (!mounted) return;
+          Navigator.pushReplacementNamed(
+            context,
+            '/my-devices',
+            arguments: {'uid': widget.uid},
+          );
           break;
         }
       }

@@ -23,21 +23,27 @@ class MyDevicesScreen extends StatelessWidget {
     Map<String, dynamic> deviceRoot,
   ) {
     final meta = _asMap(deviceRoot['Meta']);
-    final deviceStatus = _asMap(deviceRoot['DeviceStatus']);
     final name = (meta['name'] ?? deviceRoot['name'] ?? 'Device $deviceId').toString();
-    // Compute online/offline using last_seen (in ms) fallback to updatedAtMs
+    
+    // Device is considered online if sensor data is being updated regularly
     bool isOnline = false;
-    final last = deviceStatus['last_seen'] ?? meta['updatedAtMs'] ?? 0;
-    if (last is int && last > 0) {
-      isOnline = DateTime.now().millisecondsSinceEpoch - last <= 30000; // 30s window
-    } else if (last is double && last > 0) {
-      isOnline = DateTime.now().millisecondsSinceEpoch - last.toInt() <= 30000;
-    } else if (last is String) {
-      final parsed = DateTime.tryParse(last);
+    // Try to get the most recent timestamp from sensor data or fallback
+    final sensorDataRaw = deviceRoot['Sensor_Data'] is Map ? deviceRoot['Sensor_Data'] : deviceRoot['sensorData'];
+    final sensorData = _asMap(sensorDataRaw);
+    final sensorTimestamp = sensorData['timestamp'] ?? sensorData['lastUpdate'] ?? deviceRoot['lastSeen'] ?? 0;
+    int sensorTimestampMs = 0;
+    if (sensorTimestamp is int) {
+      sensorTimestampMs = sensorTimestamp;
+    } else if (sensorTimestamp is double) {
+      sensorTimestampMs = sensorTimestamp.toInt();
+    } else if (sensorTimestamp is String) {
+      final parsed = DateTime.tryParse(sensorTimestamp);
       if (parsed != null) {
-        isOnline = DateTime.now().difference(parsed).inSeconds <= 30;
+        sensorTimestampMs = parsed.millisecondsSinceEpoch;
       }
     }
+    final now = DateTime.now().millisecondsSinceEpoch;
+    isOnline = sensorTimestampMs > 0 && (now - sensorTimestampMs) <= 60000;
 
     final actuators = _asMap(deviceRoot['Actuator_Status'] ?? {});
 
@@ -76,13 +82,15 @@ class MyDevicesScreen extends StatelessWidget {
         double hum = 0.0;
         double soilMoisture = 0.0;
         Map<String, dynamic> realTimeActuators = {};
+        bool realTimeIsOnline = isOnline; // Default to initial calculation
+        
         if (snapshot.hasData && snapshot.data!.snapshot.value is Map) {
           final root = Map<String, dynamic>.from(snapshot.data!.snapshot.value as Map);
           final sensorDataRaw = root['Sensor_Data'] is Map ? root['Sensor_Data'] : root['sensorData'];
           final sensorData = _asMap(sensorDataRaw);
           final dynamic tRaw = sensorData['temperature'];
           final dynamic hRaw = sensorData['humidity'];
-          final dynamic smRaw = sensorData['soilMoisture'];
+          final dynamic smRaw = sensorData['soilMoisture'] ?? sensorData['Soil Moisture'];
           if (tRaw is num) temp = tRaw.toDouble();
           if (tRaw is String) temp = double.tryParse(tRaw) ?? temp;
           if (hRaw is num) hum = hRaw.toDouble();
@@ -92,6 +100,21 @@ class MyDevicesScreen extends StatelessWidget {
           
           // Get real-time actuator status
           realTimeActuators = _asMap(root['Actuator_Status'] ?? {});
+          
+          // Get real-time device status from DeviceStatus/state
+          final realTimeDeviceStatus = _asMap(root['DeviceStatus'] ?? {});
+          final realTimeStateValue = realTimeDeviceStatus['state']?.toString().toUpperCase();
+          final realTimeLast = realTimeDeviceStatus['last_seen'] ?? 0;
+          
+          if (realTimeStateValue == 'ONLINE') {
+            if (realTimeLast is int && realTimeLast > 0) {
+              realTimeIsOnline = DateTime.now().millisecondsSinceEpoch - realTimeLast <= 60000;
+            } else {
+              realTimeIsOnline = true;
+            }
+          } else if (realTimeStateValue == 'OFFLINE') {
+            realTimeIsOnline = false;
+          }
         }
         return Card(
           elevation: 3,
@@ -138,15 +161,15 @@ class MyDevicesScreen extends StatelessWidget {
                                 Icon(
                                   Icons.circle,
                                   size: 10, // Reduced from 12
-                                  color: isOnline ? Colors.green : Colors.red,
+                                  color: realTimeIsOnline ? Colors.green : Colors.red,
                                 ),
                                 const SizedBox(width: 4),
                                 Flexible(
                                   child: Text(
-                                    isOnline ? 'ONLINE' : 'OFFLINE',
+                                    realTimeIsOnline ? 'ONLINE' : 'OFFLINE',
                                     style: TextStyle(
                                       fontSize: 11, // Reduced from 12
-                                      color: isOnline ? Colors.green : Colors.red,
+                                      color: realTimeIsOnline ? Colors.green : Colors.red,
                                       fontWeight: FontWeight.bold,
                                     ),
                                     overflow: TextOverflow.ellipsis,
@@ -185,18 +208,16 @@ class MyDevicesScreen extends StatelessWidget {
                               const SizedBox(height: 2),
                               Text(
                                 '${temp.toStringAsFixed(1)}°C',
-                                style: const TextStyle(
-                                  fontSize: 11,
+                                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                  fontSize: 16,
                                   fontWeight: FontWeight.bold,
                                 ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
                               ),
-                              const Text(
+                              Text(
                                 'Temp',
-                                style: TextStyle(fontSize: 7),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  fontSize: 14,
+                                ),
                               ),
                             ],
                           ),
@@ -209,18 +230,16 @@ class MyDevicesScreen extends StatelessWidget {
                               const SizedBox(height: 2),
                               Text(
                                 '${hum.toStringAsFixed(1)}%',
-                                style: const TextStyle(
-                                  fontSize: 11,
+                                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                  fontSize: 16,
                                   fontWeight: FontWeight.bold,
                                 ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
                               ),
-                              const Text(
+                              Text(
                                 'Humidity',
-                                style: TextStyle(fontSize: 7),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  fontSize: 14,
+                                ),
                               ),
                             ],
                           ),
@@ -233,18 +252,16 @@ class MyDevicesScreen extends StatelessWidget {
                               const SizedBox(height: 2),
                               Text(
                                 '${soilMoisture.toStringAsFixed(1)}%',
-                                style: const TextStyle(
-                                  fontSize: 11,
+                                style: Theme.of(context).textTheme.bodyLarge?.copyWith(
+                                  fontSize: 16,
                                   fontWeight: FontWeight.bold,
                                 ),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
                               ),
-                              const Text(
+                              Text(
                                 'Soil',
-                                style: TextStyle(fontSize: 7),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
+                                style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+                                  fontSize: 14,
+                                ),
                               ),
                             ],
                           ),
